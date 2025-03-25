@@ -1,0 +1,13 @@
+# The following variables should be set:
+# # >> $GENBASE = prefix for output. Expects $GENBASE.mapped.PT.bam.
+# #---------------
+# Generate a contact map and snapshot
+PTBAM=$GENBASE.mapped.PT.bam
+ls -lrth $PTBAM \
+&& singularity run $SING/samtools_1.16.1.sif samtools view -h $PTBAM | singularity run $SING/pretextmap:0.1.9.sif PretextMap -o "$GENBASE.map.pretext" --sortby nosort \
+&& singularity run $SING/pretextsnapshot:0.0.4.sif PretextSnapshot -m "$GENBASE.map.pretext" -o "$GENBASE.snapshot" --prefix ${GENBASE}.snapshot.
+
+if [ -d "$GENBASE.snapshot" ]; then
+	echo "[$(date)] Tarballing $GENBASE.snapshot/ PreText snapshot directory..."
+	tar -cv $GENBASE.snapshot | pigz > $GENBASE.snapshot.tar.gz && rm -v $GENBASE.snapshot/* && rmdir -v $GENBASE.snapshot
+fi

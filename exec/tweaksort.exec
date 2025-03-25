@@ -1,0 +1,37 @@
+# Recommended resources: 4 PPN; 7G memory
+# The following variables should be set:
+# >> $GENOME = fasta file to sort and tweak
+# >> $NEWPREF = sequence prefix (default: first four letters of assembly)
+# >> $OUTBASE = Prefix for key output files (default: $GENBASE.chromsort)
+# >> $MINCHROM = Min. length for chromosomes (default: 10000000)
+#---------------
+GENBASE=$(basename ${GENOME%.*})
+if [ -z "$NEWPREF" ]; then
+	NEWPREF=$(echo "$GENBASE" | cut -c1-4 | tr '[:lower:]' '[:upper:]')
+fi
+if [ -z "$OUTBASE" ]; then
+  	OUTBASE=$GENBASE.chromsort
+fi
+if [ -z "$MINCHROM" ]; then
+	MINCHROM=10000000
+fi
+echo "Assembly file: $GENOME"
+echo "Sequence prefix: $NEWPREF"
+echo "Min Chrom Length (bp): $MINCHROM"
+echo "Output: $OUTBASE.\*"
+
+# --------------
+# Run Telociraptor & run summarise to check stats
+python3 $SLIMSUITE/tools/telociraptor.py -seqin $GENOME -chromsort -minchrom $MINCHROM -basefile $OUTBASE -newprefix $NEWPREF i=-1 v=0 \
+	&& mv -v $OUTBASE.tweak.fasta $OUTBASE.fasta \
+	&& python3 $SLIMSUITE/tools/seqsuite.py summarise batchrun="$GENOME,*.fasta" -basefile $OUTBASE -dna i=-1 v=0 \
+	&& sed -i 's/.fasta//' $OUTBASE.summarise.tdt \
+	&& column -t $ABASE.summarise.tdt
+
+# --------------
+# Set the $GENOME and $GENBASE for downstream processes
+GENBASE=$OUTBASE
+GENOME=$OUTBASE.fasta
+ls -lrth $GENOME
+
+# --------------

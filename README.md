@@ -12,7 +12,7 @@ In broad terms, SharpClaw makes use of the following steps and tools:
 6. [barrnap](https://github.com/tseemann/barrnap) rRNA predictions for ChromSyn plots and rRNA contig identification.
 7. Simple [ChromSyn](https://github.com/slimsuite/chromsyn) Compleasm synteny plot.
 8. Diploid Read Mapping for DepthKopy, DepthCharge and Diploidocus.
-9. [DepthCharge](depthcharge) identification of coverage dropout.
+9. [DepthCharge](https://github.com/slimsuite/depthcharge) identification of coverage dropout.
 10. KAT kmer and self-homology generation for DepthKopy and Diploidocus.
 11. [DepthKopy](https://github.com/slimsuite/depthkopy) CN estimation for ChromSyn plots.                  
 12. [SynBad](https://github.com/slimsuite/synbad) Gap classification.                                   

@@ -1,0 +1,326 @@
+##################################################################
+### Haploid Diploidocus tidy                             ~~~~~ ###
+### LAST EDIT: 23/10/24                                  ~~~~~ ###
+### AUTHORS: Richard Edwards 2024                        ~~~~~ ###
+### CONTACT: rich.edwards@uwa.edu.au                     ~~~~~ ###
+##################################################################
+
+#i# This is a simple workflow for generating the input files for a single run of diploidocus 
+#i# and then running Diploidocus.
+
+#!# Add versioning.
+#!# Add option to run BUSCO rather than Compleasm
+
+# Recommended resources: 32 PPN; 56G memory
+# If running Diploidocus only: 4 PPN; 7G memory
+
+# The following variables should be set:
+# >> $GENOME = fasta file of assembly to tidy
+# >> $ODB10 = BUSCO lineage
+# >> $READS = Main long reads file for mapping
+# >> $READTYPE = Read type for mapping
+# >> $KMMERREADS = Reads to use for raw read Kmers
+
+#---------------
+# The following optional variables can be set:
+# >> LPATH = Compleasm lineage path
+# >> DIPLOIDOCUS = whether to run Diploidocus at the end. (Can run in two phases for efficiency.)
+# >> $MINCHROM = Min. length for chromosomes for summarise (default: 10000000)
+
+### ~~~~~~~ Fix settings ~~~~~~~~ ###
+#i# These are settings with defaults that can be over-ridden.
+if [ -z "$LPATH" ]; then
+	LPATH=/software/projects/pawsey0812/rjedwards/compleasmdb
+fi
+if [ -z "$MINCHROM" ]; then
+	MINCHROM=10000000
+fi
+if [ -z "$DIPLOIDOCUS" ]; then
+	DIPLOIDOCUS=TRUE
+fi
+
+### ~~~~~~~ Set other variables ~~~~~~~~ ###
+GENBASE=$(basename ${GENOME%.*})
+THREADS=$SLURM_CPUS_PER_TASK
+BAM=$GENBASE.$READTYPE.bam
+BUSCO=$GENBASE.$ODB10.full_table.tsv
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 1: Run Compleasm to generate BUSCO table ~~~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Compleasm
+KEYOUT=$GENBASE.$ODB10.full_table.tsv
+if [ ! -f "$KEYOUT" ]; then
+	# Run Compleasm
+	RUN=run_$GENBASE.compleasm
+	singularity run $SING/compleasm:v0.2.5.sif compleasm run -a $GENOME -o $RUN -t $THREADS -l ${ODB10/_odb10/} -L $LPATH
+	#---------------
+	# Tidy Compleasm 
+	echo "Cleanup $ODB Compleasm run $RUN"
+	CBASE=$GENBASE.$ODB10
+	cp -v $RUN/summary.txt $CBASE.compleasm.txt
+	cp -v $RUN/$ODB10/full_table.tsv $CBASE.compleasm.tsv
+	cp -v $RUN/$ODB10/full_table_busco_format.tsv $CBASE.full_table.tsv
+	tar -c $RUN | pigz > $RUN.tar.gz && rm -rf $RUN
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+	exit 1
+fi
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 2: Read Mapping for BAM generation using Haploid read mapping ~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=ReadMapping
+KEYOUT=$BAM
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Define key new variables
+	SAM=${BAM/.bam/.sam}
+	MMSETTINGS="-I 4G -L --secondary=no"
+
+	# Execute code for step
+	echo "Generating BAM file"
+	singularity run $SING/minimap2:2.26.sif minimap2 -t $THREADS $MMSETTINGS -o $SAM -ax map-$READTYPE $GENOME $READS \
+		&& singularity run $SING/depthsizer:v1.9.0.sif samtools view -bo ${SAM/.sam/.tmp.bam} --threads $THREADS -S $SAM \
+		&& singularity run $SING/depthsizer:v1.9.0.sif samtools sort --threads $THREADS -o $BAM ${SAM/.sam/.tmp.bam} \
+		&& singularity run $SING/depthsizer:v1.9.0.sif paftools.js sam2paf -L $SAM > ${SAM/.sam/.paf} \
+		&& singularity run $SING/depthsizer:v1.9.0.sif samtools index -b $BAM $BAM.bai \
+		&& rm -v ${SAM/.sam/.tmp.bam} $SAM \
+		&& touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 3: KAT and selfhom file generation for DepthKopy and Diploidocus ~~~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=KAT
+KEYOUT=$GENBASE.self.bam
+KEYOUTS="$KEYOUT $GENBASE.kat-stats.tsv $GENBASE.kat-counts.cvg"
+if [ ! -f "$KEYOUT" ]; then
+
+	#i# Create *.kat-stats.tsv and *.kat-counts.cvg
+	if [ ! -f "$KEYOUT" ]; then
+		#a# $KMERREADS
+		singularity run $SING/kat:2.4.1.sif kat sect -t $THREADS -o $GENBASE.kat $GENOME ${KMERREADS/,/ }	
+		#b# Self
+		singularity run $SING/kat:2.4.1.sif kat sect -t $THREADS -o $GENBASE.selfkat $GENOME $GENOME
+		#c# Alt
+		if [ -f "$ALTGENOME" ]; then
+			singularity run $SING/kat:2.4.1.sif kat sect -t $THREADS -o $GENBASE.alt.kat $GENOME $ALTGENOME
+		fi
+		#i# Create self homology file
+		MMSETTINGS="-aDP -I 4G -k19 -w19 -m200"
+		singularity run $SING/minimap2:2.26.sif minimap2 -t $THREADS $MMSETTINGS $GENOME $GENOME | \
+			singularity run $SING/depthsizer:v1.9.0.sif samtools view -b -h - | \
+			singularity run $SING/depthsizer:v1.9.0.sif samtools sort - | tee $GENBASE.self.bam | \
+    		singularity run $SING/depthsizer:v1.9.0.sif samtools flagstat - 
+	    singularity run $SING/depthsizer:v1.9.0.sif samtools index -b $GENBASE.self.bam $GENBASE.self.bam.bai
+	fi
+
+	touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 4: DepthKopy CN estimation and SCDepth, DepthSizer Genome Size	~~~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=DepthKopy
+KEYOUT=$BAM.fastmp.scdepth
+KEYOUTS="$KEYOUT"
+
+# Define key new variables
+#i# DepthKopy can run out of memory with 32 threads and 56G memory. 
+#i# Reducing the thread count here. Might need to set as a new config setting.
+#i# Will try re-running without the KAT data if fails to complete.
+FORKS=$(($THREADS/2))
+# Execute code for step
+#i# Run DepthKopy
+if [ ! -f "$KEYOUT" ]; then
+
+	if [ ! -f "$ALTGENOME" ]; then
+	    ALTGENOME=None
+    fi
+    # Try with CSI indexing if BAM.bai missing
+    if [ ! -f "$BAM.bai" ]; then
+    	singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthsizer.py -threads $THREADS -seqin $GENOME -basefile $GENBASE -busco $BUSCO -bam $BAM -reads $READS reduced=F ignoredate i=-1 v=0 bamcsi=T
+    	singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENOME -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads="$KMERREADS" kmeralt=$ALTGENOME i=-1 v=0 bamcsi=T ignoredate
+    else
+    	singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthsizer.py -threads $THREADS -seqin $GENOME -basefile $GENBASE -busco $BUSCO -bam $BAM -reads $READS educed=F ignoredate i=-1 v=0
+		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENOME -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads="$KMERREADS" kmeralt=$ALTGENOME i=-1 v=0 ignoredate
+	fi
+	# Try re-running without the KAT data if the run failed.
+    if [ ! -f "$NEWBASE.$HAP.fulltable.tsv" ]; then
+    	echo "DepthKopy run failed. Possible memory problems? Will try without KAT data. If problems remain, try increasing memory requested."
+        if [ ! -f "$BAM.bai" ]; then
+    		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENOME -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads= kmeralt=None kmerself=F i=-1 v=0 bamcsi=T ignoredate
+	    else
+			singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENOME -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads= kmeralt=None kmerself=F i=-1 v=0 ignoredate
+		fi
+	fi
+	
+	touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] WARNING: Failed to generate $KEYOUT - some later stages may be affected" | tee -a $LOG
+	fi
+done
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 5: PurgeHaplotigs				                                    ~~~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=PurgeHaps
+KEYOUT=$GENBASE.purge.coverage_stats.csv
+KEYOUTS="$GENBASE.purge.reassignments.tsv $GENBASE.purge.coverage_stats.csv $GENBASE.$READTYPE.bam.gencov"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Define key new variables
+	SCDEP=$(printf "%.0f" "$(cat $BAM.fastmp.scdepth)")
+
+    #i# Need to pre-run purge_haplotigs:1.1.2.sif
+    echo "Running $HAP purge_haplotigs for Diploidocus..."
+    # Set and check the files to be made
+    PHTSV="$GENBASE.purge.reassignments.tsv"
+    PHCSV="$GENBASE.purge.coverage_stats.csv"
+    PHCOV="$GENBASE.$READTYPE.bam.gencov"
+    if [ -f "$PHTSV" ] && [ -f "$PHCSV" ] && [ -f "$PHCOV" ]; then
+    	echo "Previous results files found:"
+    	ls -lrth $PHCOV $PHCSV $PHTSV
+    else
+		PHLOW=$(($SCDEP/4))
+		PHMID=$((3*$SCDEP/4))
+		PHHIGH=$((2*$SCDEP))
+		echo "$GENBASE: Low=${PHLOW}X; Mid=${PHMID}X; High=${PHHIGH}X; SC=${SCDEP}X)"
+		PHMAX=200
+		if [ $PHHIGH gt 100 ]; then
+			$PHMAX=$((2*$PHHIGH))
+		fi
+		PHDIR=purge_$GENBASE
+		singularity run $SING/purge_haplotigs:1.1.2.sif purge_haplotigs hist -b $BAM -g $GENOME -t $THREADS -d $PHMAX \
+			&& singularity run $SING/purge_haplotigs:1.1.2.sif purge_haplotigs cov -i $BAM.gencov -l $PHLOW -m $PHMID -h $PHHIGH -o $GENBASE.purge.coverage_stats.csv -j 80 -s 80 \
+			&& singularity run $SING/purge_haplotigs:1.1.2.sif purge_haplotigs purge -g $GENOME -c $GENBASE.purge.coverage_stats.csv -t $THREADS -o $GENBASE.purge -a 95
+		pigz -v $GENBASE.purge*.fasta
+	fi
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 6: Diploidocus classification                                    ~~~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Diploidocus
+KEYOUT=$GENBASE.ratings.tdt
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Define key new variables
+    PHTSV="$GENBASE.purge.reassignments.tsv"
+    PHCSV="$GENBASE.purge.coverage_stats.csv"
+    PHCOV="$GENBASE.$READTYPE.bam.gencov"
+	if [ ! -f "$PHTSV" ] || [ ! -f "$PHCSV" ] || [ ! -f "$PHCOV" ]; then
+    	echo "Problem with PurgeHaplotigs output:"
+    	ls -lrth $PHCOV $PHCSV $PHTSV
+    	exit 1
+    fi
+    
+	#i# Pre-run bbmap:39.01.sif pileup.sh
+	DEPFILE=$GENBASE.depth.tdt
+	DEPSTAT=$GENBASE.depth.stats
+	if [ -f "$DEPFILE" ]; then
+    	echo "BBMap pileup.sh results files found: $DEPFILE"
+    else
+    	singularity run $SING/samtools_1.16.1.sif samtools view -h $BAM | singularity run $SING/bbmap:39.01.sif pileup.sh in=stdin out=$DEPFILE 2>&1 | tee $DEPSTAT
+    fi
+
+	#i# Run Diploidocus
+    echo "Running $GENBASE Diploidocus..."
+    SCDEP=$(printf "%.2f" "$(cat $BAM.fastmp.scdepth)")
+    # Try with CSI indexing if BAM.bai missing
+    if [ ! -f "$BAM.bai" ]; then
+		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/diploidocus.py -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM -scdepth $SCDEP kmerreads=$KMERREADS -threads $THREADS -runmode diploidocus -pretrim F -veccheck F i=-1 v=0 bamcsi=T ignoredate
+	else
+		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/diploidocus.py -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM -scdepth $SCDEP kmerreads=$KMERREADS -threads $THREADS -runmode diploidocus -pretrim F -veccheck F i=-1 v=0 ignoredate
+	fi	
+	
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 7: Summarise                                                      ~~~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Summarise
+KEYOUT=$GENBASE.summarise.tdt
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+	#i# Summarise
+	if [ ! -f "$GENBASE.fasta" ]; then
+	  ln -s $GENOME .
+	fi
+	GENSIZE=$(grep IndelRatio $GENBASE.gensize.tdt | awk '{print $7;}')
+	python3 $SLIMSUITE/tools/seqsuite.py summarise batchrun="$GENBASE.fasta,$GENBASE.*.fasta" dna basefile=$GENBASE chromlen=$MINCHROM genomesize=$GENSIZE i=-1 v=0 log=$LOG
+	sed -i 's/.fasta//' $GENBASE.summarise.tdt
+	column -t $GENBASE.summarise.tdt && touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+####################################### ::: FINISH ::: #############################################
+echo "#---------------" | tee -a $LOG
+echo "[$(date)]: Run complete" | tee -a $LOG
+echo "#---------------" | tee -a $LOG
+exit 0

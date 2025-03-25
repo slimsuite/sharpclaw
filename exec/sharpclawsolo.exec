@@ -1,0 +1,736 @@
+##################################################################
+### SHARPCLAW: Synteny, Homology And Repeat Pre-curation ~~~~~ ###
+###            for Chromosome-Level Assembly Workflows   ~~~~~ ###
+### SOLO ASSEMBLY WORKFLOW EXECUTION SCRIPT              ~~~~~ ###
+### LAST EDIT: 13/09/24                                  ~~~~~ ###
+### AUTHORS: Richard Edwards 2024                        ~~~~~ ###
+### CONTACT: rich.edwards@uwa.edu.au                     ~~~~~ ###
+##################################################################
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 1: Telociraptor chromsort of the assembly. ~~~~ ###
+## Goal: Sorts scaffolds by length and labels chromosomes.
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: Genome Assembly ($GENOME)
+## Key outputs: Sorted and tweaked assembly ($NEWBASE.fasta)
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Telociraptor
+KEYOUT=$NEWBASE.chromsort.tweak.fasta
+if [ ! -f "$KEYOUT" ]; then
+
+python3 $SLIMSUITE/tools/telociraptor.py -seqin $GENOME -chromsort -minchrom $MINCHROM -basefile $NEWBASE.chromsort -newprefix $PREF1 i=-1 v=0 log=$LOG && touch $STEP.done
+  
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step"
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT"
+	exit 1
+fi
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 4: Launch Pairtools and PreText in the background ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=PreText
+KEYOUT=$NEWBASE.dip.mapped.PT.bam
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+NCPU=48; MEM=84
+GENOME=$NEWBASE.dip.fasta
+
+# Execute code for step
+JOB=pt$(basename ${GENOME/.fasta/})
+cat $SCRIPTDIR/jobhead.sh | sed "s/cpus-per-task=16/cpus-per-task=$NCPU/" | sed "s/mem=28G/mem=${MEM}G/" | sed "s/job-name=sharpclaw/job-name=$JOB/" | tee $JOB.sh
+echo "$SETUPENV" | tee -a $JOB.sh
+echo "GENOME=$GENOME" | tee -a $JOB.sh
+echo HIC1=$HIC1 | tee -a $JOB.sh
+echo HIC2=$HIC2 | tee -a $JOB.sh
+echo ls -lrth $GENOME $HIC1 $HIC2 | tee -a $JOB.sh
+cat $EXECDIR/dualpairtools.exec | tee -a $JOB.sh
+cat $EXECDIR/pretext.exec | tee -a $JOB.sh
+echo touch $STEP.done | tee -a $JOB.sh
+cat $SCRIPTDIR/jobtail.sh | tee -a $JOB.sh && $RUNCMD $JOB.sh
+#i# This will now run in the background. Can look for the finished version later if needed.
+#i# I think the outputs for this are just needed for visualisation.
+#i# Might try filtering repeat contigs from the BAM file and rerunning PreText.
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 4b: Launch unsorted Pairtools and PreText in the background ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=UnsortedPreText
+KEYOUT=$NEWBASE.unsorted.dip.mapped.PT.bam
+if [ ! -f "$KEYOUT" ] && [ "$DEV" = "TRUE" ]; then
+
+# Define key new variables
+NCPU=48; MEM=84
+GENOME=$NEWBASE.unsorted.dip.fasta
+
+# Execute code for step
+JOB=pt$(basename ${GENOME/.fasta/})
+cat $SCRIPTDIR/jobhead.sh | sed "s/cpus-per-task=16/cpus-per-task=$NCPU/" | sed "s/mem=28G/mem=${MEM}G/" | sed "s/job-name=sharpclaw/job-name=$JOB/" | tee $JOB.sh
+echo "$SETUPENV" | tee -a $JOB.sh
+echo "GENOME=$GENOME" | tee -a $JOB.sh
+echo HIC1=$HIC1 | tee -a $JOB.sh
+echo HIC2=$HIC2 | tee -a $JOB.sh
+echo ls -lrth $GENOME $HIC1 $HIC2 | tee -a $JOB.sh
+cat $EXECDIR/dualpairtools.exec | tee -a $JOB.sh
+cat $EXECDIR/pretext.exec | tee -a $JOB.sh
+echo touch $STEP.done | tee -a $JOB.sh
+cat $SCRIPTDIR/jobtail.sh | tee -a $JOB.sh && $RUNCMD $JOB.sh
+
+else
+	if [ "$DEV" = "TRUE" ]; then
+		echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+	else
+		echo "[$(date)] DEV=FALSE - skipping $STEP step" | tee -a $LOG
+	fi
+fi
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 5: Run Compleasm on two haplotypes and combine into diploid. ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Compleasm
+KEYOUT=$NEWBASE.dip.$ODB10.full_table.tsv
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+for GENOME in $NEWBASE.hap[12].fasta; do
+	GENBASE=$(basename ${GENOME%.*})
+	#---------------
+	# Run Compleasm
+	RUN=run_$GENBASE.compleasm
+	THREADS=$SLURM_CPUS_PER_TASK
+	singularity run $SING/compleasm:v0.2.5.sif compleasm run -a $GENOME -o $RUN -t $THREADS -l ${ODB10/_odb10/} -L $LPATH
+	#---------------
+	# Tidy Compleasm 
+	echo "Cleanup $ODB Compleasm run $RUN"
+	CBASE=$GENBASE.$ODB10
+	cp -v $RUN/summary.txt $CBASE.compleasm.txt
+	cp -v $RUN/$ODB10/full_table.tsv $CBASE.compleasm.tsv
+	cp -v $RUN/$ODB10/full_table_busco_format.tsv $CBASE.full_table.tsv
+	tar -c $RUN | pigz > $RUN.tar.gz && rm -rf $RUN
+done
+# Combine outputs for Diploid
+cp $NEWBASE.hap1.$ODB10.full_table.tsv $KEYOUT \
+&& grep $PREF2 $NEWBASE.hap2.$ODB10.full_table.tsv >> $KEYOUT \
+&& touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+	exit 1
+fi
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 6: barrnap rRNA predictions for ChromSyn plots and rRNA contigs   ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Barrnap
+KEYOUT=$NEWBASE.hap2.rrna.csv
+if [ ! -f "$KEYOUT" ]; then
+
+# Execute code for step
+# Run barrnap (rDNA)
+for GENOME in $NEWBASE.hap[12].fasta; do
+  GENBASE=$(basename ${GENOME/.fasta/})
+  if [ ! -f "$GENBASE.full.ctg.txt" ]; then
+    sed 's/^[ACGT][ACGT][ACGT][ACGT]/GATC/' $GENOME > $GENBASE.tmp.fasta
+    singularity run $SING/barrnap:0.9.sif barrnap --kingdom euk -o $GENBASE.rrna.fa --threads $THREADS < $GENBASE.tmp.fasta | tee $GENBASE.rrna.gff
+    rm -v $GENBASE.tmp.fasta
+    #i# Make a GFF for plotting with ChromSyn and analysis with DepthKopy
+    grep -v 5S $GENBASE.rrna.gff | grep -v partial | tee $GENBASE.rdna.gff
+    #i# Find full-length rDNA repeats
+    touch $GENBASE.full.ctg.txt
+    for S in 5.8 18 28; do
+      echo $GENBASE ${S}S "=>" $(grep "${S}S" $GENBASE.rrna.gff | grep -v partial | awk '{print $1;}' | sort | uniq -c ) | tee -a $GENBASE.full.ctg.txt
+    done
+    #i# Make a feature file for ChromSyn
+    echo SeqName,Start,End,Strand,Col,Shape | tee $GENBASE.rrna.csv
+    grep RNA $GENBASE.rrna.gff | grep -v partial | sed 's/=/ /g' | awk '{print $1,$4,$5,$7,$11;}' | sed "s/ /,/g" | sed 's/5S/"white",23/' | sed 's/5.8S/"pink",22/' | sed 's/18S/"skyblue",24/' | sed 's/28S/"seagreen",25/' | tee -a $GENBASE.rrna.csv
+  fi
+done
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+	exit 1
+fi
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 7: Simple ChromSyn Compleasm synteny plot. ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=SimpleChromSyn
+KEYOUT=$NEWBASE.hapcheck.pdf
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+for GENOME in $NEWBASE.hap[12].fasta; do
+	GENBASE=$(basename ${GENOME/.fasta/})
+	singularity run $SING/tidk:0.2.31.sif tidk search -o $GENBASE -s AACCCT -d ./ -e tsv $GENOME
+	awk '$3 > 9 || $4 > 9' ${GENBASE}_telomeric_repeat_windows.tsv > $GENBASE.tidk.tsv
+done
+# Generate the FOFN files from a template:
+echo $PREF1 $NEWBASE.hap1 | tee template.fofn
+echo $PREF2 $NEWBASE.hap2 | tee -a template.fofn
+
+for FOFNDATA in telomeres.tdt-sequences $ODB10.full_table.tsv-busco gaps.tdt-gaps tidk.tsv-tidk rrna.csv-ft; do
+	EXT=$(echo $FOFNDATA | awk -F '-' '{print $1;}')
+	FOFN=$(echo $FOFNDATA | awk -F '-' '{print $2;}').fofn
+	sed "s/$/.$EXT/" template.fofn | tee $FOFN
+done
+
+FOCUS=$PREF1
+SETTINGS="pdfwidth=40 orphans=FALSE minregion=0 minbusco=1 ticks=1e7"
+RUN=$NEWBASE
+BASE=hapcheck
+singularity run $SING/depthsizer:v1.9.0.sif Rscript $SLIMSUITE/libraries/r/chromsyn.R $SETTINGS focus=$FOCUS basefile=$RUN.$BASE ybleed=1 | tee $RUN.$BASE.log
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+	exit 1
+fi
+
+#i# Could add exit here for "basic" mode run?
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 8: Diploid Read Mapping for DepthKopy, DepthCharge and Diploidocus. ~~ ###
+## Goal: Generate haploid BAM and PAF files of mapped reads using Diploid read mapping.
+## Approach: Map long reads to diploid, partition into haploids and convert to PAF.
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=ReadMapping
+KEYOUT=$NEWBASE.hap2.$READTYPE.paf
+KEYOUTS="$NEWBASE.hap1.$READTYPE.bam $NEWBASE.hap2.$READTYPE.bam $NEWBASE.hap1.$READTYPE.paf $KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+MMSETTINGS="-I 4G -L --secondary=no"
+SAM=$NEWBASE.dip.$READTYPE.sam
+BAM=${SAM/.sam/.bam}
+
+# Execute code for step
+echo "Generating diploid BAM and PAF files"
+singularity run $SING/minimap2:2.26.sif minimap2 -t $THREADS $MMSETTINGS -o $SAM -ax map-$READTYPE $NEWBASE.dip.fasta $READS \
+	&& singularity run $SING/depthsizer:v1.9.0.sif samtools view -bo ${SAM/.sam/.tmp.bam} --threads $THREADS -S $SAM \
+	&& singularity run $SING/depthsizer:v1.9.0.sif samtools sort --threads $THREADS -o $BAM ${SAM/.sam/.tmp.bam} \
+	&& singularity run $SING/depthsizer:v1.9.0.sif paftools.js sam2paf -L $SAM > ${SAM/.sam/.paf} \
+	&& singularity run $SING/depthsizer:v1.9.0.sif samtools index -b $BAM $BAM.bai \
+	&& rm -v ${SAM/.sam/.tmp.bam} $SAM 
+
+echo "Splitting BAM and PAF files into haplotypes"
+HAPBASE=$NEWBASE.hap1
+awk '{print $1"\t1\t"$2;}' $HAPBASE.telomeres.tdt | grep -v SeqName | tee $HAPBASE.bed \
+&& singularity run $SING/depthsizer:v1.9.0.sif samtools view -h -@ $THREADS -L $HAPBASE.bed $BAM | grep -v "SN:$PREF2" | singularity run $SING/depthsizer:v1.9.0.sif samtools view -hb -@ $THREADS - > $HAPBASE.$READTYPE.bam
+grep $PREF1 ${SAM/.sam/.paf} > $HAPBASE.$READTYPE.paf
+
+HAPBASE=$NEWBASE.hap2
+awk '{print $1"\t1\t"$2;}' $HAPBASE.telomeres.tdt | grep -v SeqName | tee $HAPBASE.bed \
+&& singularity run $SING/depthsizer:v1.9.0.sif samtools view -h -@ $THREADS -L $HAPBASE.bed $BAM | grep -v "SN:$PREF1" | singularity run $SING/depthsizer:v1.9.0.sif samtools view -hb -@ $THREADS - > $HAPBASE.$READTYPE.bam \
+&& singularity run $SING/depthsizer:v1.9.0.sif samtools index -b $HAPBASE.$READTYPE.bam $HAPBASE.$READTYPE.bam.bai
+grep $PREF2 ${SAM/.sam/.paf} > $HAPBASE.$READTYPE.paf
+
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 9: DepthCharge identification of coverage dropout. ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=DepthCharge
+KEYOUT=$NEWBASE.hap2.depthcharge.tdt
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+for HAP in hap1 hap2; do
+	GENBASE=$NEWBASE.$HAP
+    singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/dev/depthcharge.py -seqin $GENBASE.fasta -basefile $GENBASE -threads $THREADS -paf $GENBASE.$READTYPE.paf -minspan 10 -breakmode report i=-1 v=0
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 10: KAT and selfhom file generation for DepthKopy and Diploidocus ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=KAT
+KEYOUT=$NEWBASE.hap2.self.bam
+KEYOUTS="$NEWBASE.hap1.self.bam $NEWBASE.hap2.self.bam"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+#i# Create *.kat-stats.tsv and *.kat-counts.cvg
+for HAP in hap1 hap2; do
+  if [ ! -f "$NEWBASE.$HAP.self.bam" ]; then
+	#a# $KMERREADS
+	if [ "$TRIM10X" = "T" ]; then
+		singularity run $SING/kat:2.4.1.sif kat sect -t $THREADS --5ptrim 16,0 -o $NEWBASE.$HAP.kat $NEWBASE.$HAP.fasta ${KMERREADS/,/ }
+	else
+		singularity run $SING/kat:2.4.1.sif kat sect -t $THREADS -o $NEWBASE.$HAP.kat $NEWBASE.$HAP.fasta ${KMERREADS/,/ }	
+	fi
+	#b# Self
+	singularity run $SING/kat:2.4.1.sif kat sect -t $THREADS -o $NEWBASE.$HAP.self.kat $NEWBASE.$HAP.fasta $NEWBASE.$HAP.fasta
+	#c# Alt
+    ALTGENOME=$NEWBASE.hap1.fasta
+    if [ "$HAP" == "hap1" ]; then
+    	ALTGENOME=$NEWBASE.hap2.fasta
+    fi
+	singularity run $SING/kat:2.4.1.sif kat sect -t $THREADS -o $NEWBASE.$HAP.alt.kat $NEWBASE.$HAP.fasta $ALTGENOME
+	#i# Create self homology file
+	MMSETTINGS="-aDP -I 4G -k19 -w19 -m200"
+	singularity run $SING/minimap2:2.26.sif minimap2 -t $THREADS $MMSETTINGS $NEWBASE.$HAP.fasta $NEWBASE.$HAP.fasta | \
+		singularity run $SING/depthsizer:v1.9.0.sif samtools view -b -h - | \
+		singularity run $SING/depthsizer:v1.9.0.sif samtools sort - | tee $NEWBASE.$HAP.self.bam | \
+    	singularity run $SING/depthsizer:v1.9.0.sif samtools flagstat - 
+    singularity run $SING/depthsizer:v1.9.0.sif samtools index -b $NEWBASE.$HAP.self.bam $NEWBASE.$HAP.self.bam.bai
+  fi
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 11: DepthKopy CN estimation for ChromSyn plots.                   ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=DepthKopy
+KEYOUT=$NEWBASE.hap2.fulltable.csv
+KEYOUTS="$NEWBASE.hap1.fulltable.csv $KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+#i# DepthKopy can run out of memory with 32 threads and 56G memory. 
+#i# Reducing the thread count here. Might need to set as a new config setting.
+#i# Will try re-running without the KAT data if fails to complete.
+FORKS=$(($NCPU/2))
+# Execute code for step
+#i# Run DepthKopy
+for HAP in hap1 hap2; do
+  if [ ! -f "$NEWBASE.$HAP.fulltable.csv" ]; then
+    GENBASE=$NEWBASE.$HAP
+    BUSCO=$GENBASE.$ODB10.full_table.tsv
+    BAM=$GENBASE.$READTYPE.bam
+    CONTIGS=$GENBASE.contigs.tdt
+    ALTGENOME=$NEWBASE.hap1.fasta
+    if [ "$HAP" == "hap1" ]; then
+    	ALTGENOME=$NEWBASE.hap2.fasta
+    fi
+    # Try with CSI indexing if BAM.bai missing
+    if [ ! -f "$BAM.bai" ]; then
+    	singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads="$KMERREADS" kmeralt=$ALTGENOME regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0 bamcsi=T
+    else
+		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads="$KMERREADS" kmeralt=$ALTGENOME regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0
+	fi
+	# Try re-running without the KAT data if the run failed.
+    if [ ! -f "$NEWBASE.$HAP.fulltable.csv" ]; then
+    	echo "DepthKopy run failed. Possible memory problems? Will try without KAT data. If problems remain, try increasing memory requested."
+        if [ ! -f "$BAM.bai" ]; then
+    		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads= kmeralt=None kmerself=F regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0 bamcsi=T
+	    else
+			singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/depthkopy.py -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads= kmeralt=None kmerself=F regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0
+		fi
+	fi
+	
+  fi
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] WARNING: Failed to generate $KEYOUT - some later stages may be affected" | tee -a $LOG
+	fi
+done
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 12: SynBad Gap classification.                                    ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=SynBad
+KEYOUT=$NEWBASE.synbad.hit.gap.tdt
+KEYOUTS="$NEWBASE.synbad.qry.gap.tdt $NEWBASE.synbad.hit.gap.tdt"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+BASE1=$NEWBASE.hap1
+BASE2=$NEWBASE.hap2
+ls -lrth $BASE1.fasta $BASE1.$READTYPE.bam $BASE1.$READTYPE.paf $BASE1.$ODB10.full_table.tsv $BASE1.mapped.PT.bam
+ls -lrth $BASE2.fasta $BASE2.$READTYPE.bam $BASE2.$READTYPE.paf $BASE2.$ODB10.full_table.tsv $BASE2.mapped.PT.bam
+# 
+# Run SynBad
+singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/synbad.py genome1=$BASE1.fasta bam1=$BASE1.$READTYPE.bam paf1=$BASE1.$READTYPE.paf hicbam1=$BASE1.mapped.PT.bam busco1=$BASE1.$ODB10.full_table.tsv genome2=$BASE2.fasta bam2=$BASE2.$READTYPE.bam paf2=$BASE2.$READTYPE.paf hicbam2=$BASE2.mapped.PT.bam busco2=$BASE2.$ODB10.full_table.tsv basefile=$NEWBASE.synbad chr1=$PREF1 chr2=$PREF2 correct=invert spannedflank=100 synreadspan=3 i=-1 v=0 threads=$THREADS
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 13: Detailed ChromSyn plots with DepthCharge, CN and SynBad       ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=ChromSynBad
+KEYOUT=
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+echo "Generating updated gaps and features files..."
+cp -v $NEWBASE.synbad.qry.gap.tdt $NEWBASE.hap1.synbadgaps.tsv
+cp -v $NEWBASE.synbad.hit.gap.tdt $NEWBASE.hap2.synbadgaps.tsv
+for BASE in $NEWBASE.hap1 $NEWBASE.hap2; do
+	cp -v $BASE.rrna.csv $BASE.ft.csv
+	grep bad $BASE.depthcharge.tdt | awk '{print $1","$2","$3",.,black,-2";}' | tee -a $BASE.ft.csv
+done
+#i# Colour sequences by type
+for HAP in hap1 hap2; do
+	TFILE=$NEWBASE.$HAP.telomeres.tdt
+	TSV=$NEWBASE.$HAP.sequences.tsv
+	head -n 1 $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tCol";}' | tee $TSV
+	grep -E "CHR[0-9]+[^\.]" $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tpalegreen";}' | tee -a $TSV
+	grep -E "CHR[0-9]+\." $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tyellow2";}' | tee -a $TSV
+	grep SCF $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\ttan";}' | tee -a $TSV
+	grep CTG $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tivory2";}' | tee -a $TSV
+done
+#i# Update FOFN
+for FOFNDATA in ft.csv-fullft synbadgaps.tsv-synbad sequences.tsv-colseq; do
+	EXT=$(echo $FOFNDATA | awk -F '-' '{print $1;}')
+	FOFN=$(echo $FOFNDATA | awk -F '-' '{print $2;}').fofn
+	sed "s/$/.$EXT/" template.fofn | tee $FOFN
+done
+#i# CN data
+cat $NEWBASE.hap[12].fulltable.tsv | head -n 1 > $NEWBASE.cndata.tsv
+sed 's/^/$PREF1\t/' $NEWBASE.hap1.fulltable.tsv | grep -v SeqName >> $NEWBASE.cndata.tsv
+sed 's/^/$PREF2\t/' $NEWBASE.hap2.fulltable.tsv | grep -v SeqName >> $NEWBASE.cndata.tsv
+
+echo "Generating regdata file for ChromSyn from 1kb+ SynBad hit regions..."
+QRY=$PREF1; HIT=$PREF2
+TSV=$NEWBASE.regdata.tsv
+echo "Genome, HitGenome, SeqName, Start, End, Strand, Hit, HitStart, HitEnd" | sed "s/, /\t/g" | tee $TSV
+awk '$9 > 1000 { print $1"\t"$2"\t"$3"\t"$7"\t"$4"\t"$5"\t"$6; }' $NEWBASE.synbad.qry.full.tdt | sed "s/^/$PREF1\t$PREF2\t/" | grep -v Qry | tee -a $TSV
+awk '$9 > 1000 { print $4"\t"$5"\t"$6"\t"$7"\t"$1"\t"$2"\t"$3; }' $NEWBASE.synbad.hit.full.tdt | sed "s/^/$PREF2\t$PREF1\t/" | grep -v Qry | tee -a $TSV
+
+echo "Full assembly ChromSyn plot in QC mode with 'good' gaps hidden"
+FOCUS=$QRY
+SEQORDER=$(grep CHR $NEWBASE.hap1.sequences.tsv | awk '{print $1;}' | sort | tr '\n' ',' | sed 's/,$//')
+RESTRICT=$(cat $NEWBASE.hap[12].sequences.tsv | grep CHR | awk '{print $1;}' | sort | tr '\n' ',' | sed 's/,$//')
+SETTINGS="pdfwidth=40 orphans=FALSE ticks=1e7 minlen=0 maxregions=8000 regdata=$NEWBASE.regdata.tsv minregion=0 ybleed=1 focus=$FOCUS seqorder=$SEQORDER chromfill=Col regmirror=F sequences=colseq.fofn gaps=synbad.fofn ft=fullft.fofn cndata=$NEWBASE.cndata.tsv restrict=$RESTRICT"
+echo $SETTINGS
+RUN=$NEWBASE
+BASE=qcmode
+singularity run $SING/depthsizer:v1.9.0.sif Rscript $SLIMSUITE/libraries/r/chromsyn.R $SETTINGS basefile=$RUN.$BASE qcmode=T | tee $RUN.$BASE.log
+
+echo "Chromosome-level ChromSyn plots"
+for CHR in $(grep -E "CHR[0-9]+[^\.]" $NEWBASE.hap1.telomeres.tdt | awk '{print $1;}' | sed "s/$PREF1//" | sort -u); do
+	BASE=$CHR
+	RESTRICT=$(cat $NEWBASE.hap[12].sequences.tsv | grep CHR$CHR | awk '{print $1;}' | sort | tr '\n' ',' | sed 's/,$//')
+	echo "$CHR: $RESTRICT"
+	singularity run $SING/depthsizer:v1.9.0.sif Rscript $SLIMSUITE/libraries/r/chromsyn.R $SETTINGS basefile=$RUN.$BASE restrict=$RESTRICT | tee $RUN.$BASE.log
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 14: Diploidocus classification for reduced PreText.               ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Diploidocus
+KEYOUT=$NEWBASE.hap2.ratings.tdt
+KEYOUTS="$NEWBASE.hap1.ratings.tdt $NEWBASE.hap2.ratings.tdt"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+for HAP in hap1 hap2; do
+    GENBASE=$NEWBASE.$HAP
+    BUSCO=$GENBASE.$ODB10.full_table.tsv
+    BAM=$GENBASE.$READTYPE.bam
+    #i# Need to pre-run purge_haplotigs:1.1.2.sif
+    echo "Running $HAP purge_haplotigs for Diploidocus..."
+    SCDEP=$(printf "%.0f" "$(cat $BAM.fastmp.scdepth)")
+    PHLOW=$(($SCDEP/4))
+    PHMID=$((3*$SCDEP/4))
+    PHHIGH=$((2*$SCDEP))
+    echo "$HAP: Low=${PHLOW}X; Mid=${PHMID}X; High=${PHHIGH}X; SC=${SCDEP}X)"
+    PHMAX=200
+    if [ $PHHIGH gt 100 ]; then
+    	$PHMAX=$((2*$PHHIGH))
+    fi
+	PHDIR=purge_$GENBASE
+	singularity run $SING/purge_haplotigs:1.1.2.sif purge_haplotigs hist -b $BAM -g $GENBASE.fasta -t $THREADS -d $PHMAX \
+		&& singularity run $SING/purge_haplotigs:1.1.2.sif purge_haplotigs cov -i $BAM.gencov -l $PHLOW -m $PHMID -h $PHHIGH -o $GENBASE.purge.coverage_stats.csv -j 80 -s 80 \
+		&& singularity run $SING/purge_haplotigs:1.1.2.sif purge_haplotigs purge -g $GENBASE.fasta -c $GENBASE.purge.coverage_stats.csv -t $THREADS -o $GENBASE.purge -a 95
+    echo "Running $HAP Diploidocus..."
+    # Try with CSI indexing if BAM.bai missing
+    if [ ! -f "$BAM.bai" ]; then
+		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/diploidocus.py -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads=$KMERREADS -threads $THREADS -runmode diploidocus -pretrim F -veccheck F i=-1 v=0 bamcsi=T
+	else
+		singularity run $SING/depthsizer:v1.9.0.sif python3 $SLIMSUITE/tools/diploidocus.py -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads=$KMERREADS -threads $THREADS -runmode diploidocus -pretrim F -veccheck F i=-1 v=0
+	fi	
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 15: Reduced PreText generation without repeat scaffolds.          ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=ReducedPreText
+KEYOUT=$NEWBASE.dip.diploidocus.map.pretext
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ] && [ -f "$NEWBASE.dip.mapped.PT.bam" ]; then
+
+# Define key new variables
+PTBAM=$NEWBASE.dip.mapped.PT.bam
+
+# Execute code for step
+echo "Defining BED files for $NEWBASE reduced PreText..."
+cat $NEWBASE.hap[12].ratings.tdt | grep keep | awk '{print $1"\t1\t"$2;}' > $NEWBASE.diploidocus.bed
+cp $NEWBASE.diploidocus.bed $NEWBASE.nojunk.bed
+cat $NEWBASE.hap[12].ratings.tdt | grep quarantine | awk '{print $1"\t1\t"$2;}' >> $NEWBASE.nojunk.bed
+cp $NEWBASE.nojunk.bed $NEWBASE.norepeat.bed
+cat $NEWBASE.hap[12].ratings.tdt | grep junk | awk '{print $1"\t1\t"$2;}' >> $NEWBASE.norepeat.bed
+echo "Reduced PT BAM files and PreText"
+for BED in norepeat nojunk diploidocus; do
+	singularity run $SING/depthsizer:v1.9.0.sif samtools view -h -@ $THREADS -L $NEWBASE.$BED.bed $PTBAM > $NEWBASE.$BED.PT.bam | \
+		singularity run $SING/pretextmap:0.1.9.sif PretextMap -o "$NEWBASE.dip.$BED.map.pretext" --sortby nosort \
+		&& singularity run $SING/pretextsnapshot:0.0.4.sif PretextSnapshot -m "$NEWBASE.dip.$BED.map.pretext" -o "$NEWBASE.dip.$BED.output" --prefix $NEWBASE.dip.${BED}_snapshot
+done
+
+touch $STEP.done
+
+else
+	if [ -f "$NEWBASE.dip.mapped.PT.bam" ]; then
+		echo "[$(date)] $NEWBASE.dip.mapped.PT.bam not yet generated - skipping $STEP step" | tee -a $LOG
+	else
+		echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+	fi
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+####################################### ::: FINISH ::: #############################################
+echo "#---------------" | tee -a $LOG
+echo "[$(date)]: Run complete" | tee -a $LOG
+echo "#---------------" | tee -a $LOG
+exit 0
+
+####################################### ::: TEMPLATE CODE ::: ######################################
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP n: Template. ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=
+KEYOUT=
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+

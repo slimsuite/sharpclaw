@@ -1,0 +1,12 @@
+#i# Simple script for moving file $1 to directory $2/.
+#i# Usage: backupfile.exec <FILE> <PATH>
+
+FILE=$1
+TODIR=$2
+
+if [ -f "$FILE" ]; then
+  if [ ! -d "$TODIR" ]; then
+	mkdir -vp $TODIR
+  fi
+  mv -v $FILE $TODIR/.
+fi

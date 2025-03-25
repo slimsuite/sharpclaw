@@ -1,0 +1,1605 @@
+##################################################################
+### SHARPCLAW: Synteny, Homology And Repeat Pre-curation ~~~~~ ###
+###            for Chromosome-Level Assembly Workflows   ~~~~~ ###
+### MAIN WORKFLOW EXECUTION SCRIPT                       ~~~~~ ###
+### VERSION: 0.1.0                                       ~~~~~ ###
+### LAST EDIT: 23/10/24                                  ~~~~~ ###
+### AUTHORS: Richard Edwards 2024                        ~~~~~ ###
+### CONTACT: rich.edwards@uwa.edu.au                     ~~~~~ ###
+##################################################################
+
+# This is the primary script for the SHARPCLAW pre-curation workflow
+
+####################################### ::: HISTORY ::: ############################################
+# v0.1.0 : Initial working version.
+
+####################################### ::: TO DO ::: ##############################################
+# [ ] : Generate and test full working version.
+# [ ] : Add robust checks for input files and software.
+# [ ] : Consider partitioning stages into subdirectories.
+# [ ] : Make the telomere fixing an option. Better default might be off but clear reporting.
+# [ ] : Add a DIPLOIDBAM setting to enable traditional haploid running of Diploidocus
+# [ ] : Add a NUMTFinder run if MTDNA is provided.
+# [ ] : Add an option to run PreText etc. in-line rather than launching a job.
+
+####################################### ::: SETUP ::: ##############################################
+
+### ~~~~~~~ Fix settings ~~~~~~~~ ###
+#i# These are settings introduced during development that will ultimately be in the config file.
+if [ -z "$DEPTHKOPYCN" ]; then
+	DEPTHKOPYCN=TRUE
+fi
+if [ -z "$CLEANUP" ]; then
+	if [ "$DEV" = "TRUE" ]; then
+		CLEANUP=backup
+	else
+		CLEANUP=delete
+	fi
+fi
+# if [ -z "$BACKUPDIR" ]; then
+# 	BACKUPDIR=sharpclaw_intermed
+# fi
+# if [ "$CLEANUP" = "backup" ] && [ ! -d "$BACKUPDIR" ]; then
+# 	mkdir -vp $BACKUPDIR
+# fi
+
+### ~~~~~~~~~~ Set variables ~~~~~~~~~~ ###
+HAPBASE1=$(basename ${HAP1%.*})
+HAPBASE2=$(basename ${HAP2%.*})
+RUNDIR=$(pwd)
+
+##################################### ::: PREFLIGHT CHECKS ::: #######################################
+echo "[$(date)] Preflight checks of dependencies..."
+#i# SLiMSuite tools
+for TOOL in telociraptor seqsuite; do
+	TESTV=$(python3 $SLIMSUITE/tools/$TOOL.py --version) && echo "[$(date)] $TOOL: v$TESTV"
+	if [ -z "$TESTV" ]; then
+		echo "ERROR! Cannot run: python3 $SLIMSUITE/tools/$TOOL.py"; exit 1
+	fi
+done
+#i# Minimap2
+TESTV=$($MINIMAP2 --version) && echo "[$(date)] Minimap2: v$TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $MINIMAP2"; exit 1
+fi
+#i# Compleasm
+TESTV=$($COMPLEASM --help) && TESTV="found" && echo "[$(date)] Compleasm: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $COMPLEASM"; exit 1
+fi
+#i# Barrnap
+TESTV=$($BARRNAP --version) && TESTV="found" && echo "[$(date)] barrnap: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $BARRNAP"; exit 1
+fi
+#i# TIDK
+TESTV=$($TIDK --version) && echo "[$(date)] TIDK: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $TIDK"; exit 1
+fi
+#i# Rscript
+TESTV=$($RSCRIPT --version) && echo "[$(date)] Rscript: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $RSCRIPT"; exit 1
+fi
+#i# samtools
+TESTV=$($SAMTOOLS --version | head -n 1) && echo "[$(date)] samtools: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $SAMTOOLS"; exit 1
+fi
+#i# paftools
+TESTV=$($PAFTOOLS version) && echo "[$(date)] paftools: v$TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $PAFTOOLS"; exit 1
+fi
+#i# DepthCharge
+TESTV=$($DEPTHCHARGE --version) && echo "[$(date)] DepthCharge: v$TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $DEPTHCHARGE"; exit 1
+fi
+#i# DepthKopy
+TESTV=$($DEPTHKOPY --version) && echo "[$(date)] DepthKopy: v$TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $DEPTHKOPY"; exit 1
+fi
+#i# KAT
+TESTV=$($KAT --version) && echo "[$(date)] KAT: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $KAT"; exit 1
+fi
+#i# SynBad
+TESTV=$($SYNBAD --version) && echo "[$(date)] SynBad: v$TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $SYNBAD"; exit 1
+fi
+#i# purge_haploptigs
+TESTV=$($PURGEHAPLOTIGS 2>&1 | grep Purge | head -n1 ) && echo "[$(date)] purge_haploptigs: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $PURGEHAPLOTIGS"; exit 1
+fi
+#i# bbmap pileup.sh
+TESTV=$($BBMAPPILEUP --version | head -n 1) && TESTV="found" && echo "[$(date)] bbmap pileup.sh: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $BBMAPPILEUP"; exit 1
+fi
+#i# Diploidocus
+TESTV=$($DIPLOIDOCUS --version) && echo "[$(date)] Diploidocus: v$TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $DIPLOIDOCUS"; exit 1
+fi
+#i# PreTextMap
+TESTV=$($PRETEXTMAP | head -n 1) && TESTV="found" && echo "[$(date)] PreTextMap: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $PRETEXTMAP"; exit 1
+fi
+#i# PretextSnapshot
+TESTV=$($PRETEXTSNAPSHOT --version | head -n 1) && echo "[$(date)] PretextSnapshot: $TESTV"
+if [ -z "$TESTV" ]; then
+	echo "ERROR! Cannot run: $PRETEXTSNAPSHOT"; exit 1
+fi
+
+####################################### ::: SHARPCLAW ::: ##############################################
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 1: Telociraptor chromsort of the hap1 assembly. ~~~~ ###
+## Goal: Sorts scaffolds by length and labels chromosomes.
+## Rationale: Final chromsosomes will be sorted by length. Clear labels makes combining and curating data easier.
+## Method: Telociraptor sorting of scaffolds and assigning putative chromosomes based on length.
+## Key inputs: Hap1 Genome Assembly ($HAP1)
+## Key outputs: 
+## - Sorted and tweaked assembly ($NEWBASE.chromsort.tweak.fasta)
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=01-Telociraptor
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.chromsort.tweak.fasta
+if [ ! -f "$KEYOUT" ]; then
+
+	#i# Run Telociraptor on Hap1
+	echo "[$(date)] size-sorting and renaming Hap1 with Telociraptor..."
+	python3 $SLIMSUITE/tools/telociraptor.py -seqin $HAP1 -chromsort -minchrom $MINCHROM -basefile $NEWBASE.chromsort -newprefix $PREF1 i=-1 v=0 log=$LOG \
+		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
+ 
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step"
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT"
+	exit 1
+fi
+# Move unwanted files to intermediate directory
+for EXT in gaplen.tdt gaps.tdt contigs.tdt contigs.fasta.* telomeres.tdt; do
+	$SHARPCLAW/exec/backupfile.exec $HAPBASE1.$EXT $STEP
+done
+if [ -f "$NEWBASE.chromsort.tweak.telomeres.tdt" ]; then
+	mv -v $NEWBASE.chromsort.* $STEP/
+	cp -v $STEP/$KEYOUT .
+fi
+# ├── $NEWBASE.chromsort.tweak.fasta
+if [ "$RUNMODE" = "$STEP" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 2: PAFScaff scaffold each haplotype against the primary assembly. ~~~~ ###
+## Goal: Orient and rename the scaffolds of each haplotype to facilitate dual curation of HiC map
+## Rationale: Curation is easier if sequences are named and oriented consistently.
+## Method: 	Hap2 is first mapped onto the chromosome-sorted Hap1 from Telociraptor. This will reorient and rename the
+## 			main chromosome scaffolds to match between the haplotypes. Any unplaced scaffolds from Hap2 with clear 
+## 			(unique) mapping to Hap1 chromosomes will also be reoriented and renames appropriately. The orignal Hap1
+##			is then mapped back onto this renamed Hap2 to pick up any of its unplaced scaffolds that belong together.
+##			Note that when there are chromosome fusions, the CHR numbering will be wrong, but everything should end up
+##			together for easier curation in PreText
+## Key inputs: Hap2 Genome Assembly ($HAP2) and sorted $HAP1 assembly
+## Key outputs: Sorted assemblies and summary ($NEWBASE.summarise.tdt)
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=02-PAFScaff
+START="[$(date)] Step $STEP"
+KEYOUT="$NEWBASE.summarise.tdt"
+KEYOUTS="$KEYOUT $HAPBASE1.sorted.fasta $HAPBASE2.sorted.fasta"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Map the Hap2 onto Hap1 to place scaffolds
+	echo "[$(date)] mapping Hap2 onto size-sorted Hap1 with minimap2..."
+	$MINIMAP2 --cs -N 100 -p 0.0001 -x asm20 -t $THREADS $NEWBASE.chromsort.tweak.fasta $HAP2 > tmp$HAPBASE2.paf && mv -v tmp$HAPBASE2.paf $HAPBASE2.paf
+	echo "[$(date)] assigning Hap2 scaffolds to Hap1 scaffolds, reorienting and renaming with PAFScaff	..."
+	python3 $SLIMSUITE/tools/pafscaff.py -pafin $HAPBASE2.paf -seqin $HAP2 -reference $NEWBASE.chromsort.tweak.fasta -basefile $HAPBASE2 -refprefix $PREF1 -newprefix $PREF2 -unplaced ${PREF2}SCF -ctgprefix ${PREF2}CTG -threads $THREADS scaffold=F purechrom=T i=-1 v=0 log=$LOG
+	cat $HAPBASE2.placed.fasta $HAPBASE2.unplaced.fasta > $HAPBASE2.sorted.fasta
+	# Map the Hap1 onto Hap2 to pick up any unplaced scaffolds
+	echo "[$(date)] re-mapping original Hap1 onto sorted Hap2 with minimap2 to pick up unplaced scaffolds..."
+	$MINIMAP2 --cs -N 100 -p 0.0001 -x asm20 -t $THREADS $HAPBASE2.sorted.fasta $NEWBASE.chromsort.tweak.fasta > tmp$HAPBASE1.paf && mv -v tmp$HAPBASE1.paf $HAPBASE1.paf
+	echo "[$(date)] assigning Hap1 scaffolds to Hap2 scaffolds, reorienting and renaming with PAFScaff..."
+	python3 $SLIMSUITE/tools/pafscaff.py -pafin $HAPBASE1.paf -seqin $NEWBASE.chromsort.tweak.fasta -reference $HAPBASE2.sorted.fasta -basefile $HAPBASE1 -refprefix $PREF2 -newprefix $PREF1 -unplaced ${PREF1}SCF -ctgprefix ${PREF1}CTG -threads $THREADS scaffold=F purechrom=T i=-1 v=0 log=$LOG
+	cat $HAPBASE1.placed.fasta $HAPBASE1.unplaced.fasta > $HAPBASE1.sorted.fasta
+	# Summarise
+	echo "[$(date)] summarising sorted and renamed haplotypes..."
+	python3 $SLIMSUITE/tools/seqsuite.py summarise batchrun="$HAPBASE1.sorted.fasta,$HAPBASE2.sorted.fasta" dna basefile=$NEWBASE i=-1 v=0 log=$LOG \
+		&& sed -i 's/.fasta//' $NEWBASE.summarise.tdt \
+		&& column -t $NEWBASE.summarise.tdt \
+		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+# Move unwanted files to intermediate directory
+for EXT in paf placed.fasta unplaced.fasta placed.fasta.index unplaced.fasta.index; do
+	$SHARPCLAW/exec/backupfile.exec $HAPBASE1.$EXT $STEP
+	$SHARPCLAW/exec/backupfile.exec $HAPBASE2.$EXT $STEP
+done
+# ├── $HAPBASE[12].scaffolds.tdt
+# ├── $HAPBASE[12].sorted.fasta
+# ├── $HAPBASE[12].sorted.fasta.index
+# ├── $NEWBASE.sharpclaw.summarise.tdt
+if [ "$RUNMODE" = "$STEP" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 3: Telociraptor tweak of each haplotype and combine to make a diploid for the dual curation.. ~~~~ ###
+## Goal: Combine and sort the haplotypes for dual curation in PreText of chromosome pairs.
+## Rationale: Using Telociraptor for this can optionally fix telomeres and provide easy intervention and editing if needed.
+## Method: Telociraptor is first used to make assembly maps that can be combined into a sorted diploid.
+##		NOTE: By default, SharpClaw will trim or invert contigs within 5% of the scaffold ends to reveal telomeres.
+##		Update the TRIMLIMIT and INVLIMIT settings in the config file to alter. (Set to 0 to disable.)
+## Key inputs: Sorted Hap1 and Hap2 assemblies.
+## Key outputs: Combined sorted diploid assembly
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=03-Diploid
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.dip.fasta
+if [ ! -f "$KEYOUT" ]; then
+
+	# Optionally tweak the haplotypes and generate associated files
+	echo "[$(date)] Optionally tweak the haplotypes and generate assembly maps..."
+	python3 $SLIMSUITE/tools/telociraptor.py -seqin $HAPBASE1.sorted.fasta -basefile $HAPBASE1.sorted invlimit=$INVLIMIT trimlimit=$TRIMLIMIT i=-1 v=0 log=$LOG
+	python3 $SLIMSUITE/tools/telociraptor.py -seqin $HAPBASE2.sorted.fasta -basefile $HAPBASE2.sorted invlimit=$INVLIMIT trimlimit=$TRIMLIMIT i=-1 v=0 log=$LOG
+	echo "[$(date)] Renaming $HAPBASE1.sorted.tweak.* and $HAPBASE2.sorted.tweak.* to $NEWBASE.hap[12].* ..."	
+	for EXT in txt fasta fasta.index gaps.TDT gaplen.tdt contigs.tdt telomeres.tdt; do
+		mv -v $HAPBASE1.sorted.tweak.$EXT $NEWBASE.hap1.$EXT
+		mv -v $HAPBASE2.sorted.tweak.$EXT $NEWBASE.hap2.$EXT
+	done
+	echo "NOTE: if editing the $NEWBASE.hap*.txt maps, regenerate from the $HAPBASE1.sorted.fasta and $HAPBASE2.sorted.fasta files"
+	# Checking files generate OK
+	for KEYOUT in $NEWBASE.hap1.fasta $NEWBASE.hap2.fasta $NEWBASE.hap1.txt $NEWBASE.hap2.txt; do
+		if [ ! -f "$KEYOUT" ]; then
+			echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+			exit 1
+		fi
+	done
+	# Diploid assembly generation
+	echo "[$(date)] Combine haplotypes into diploid assembly..."
+	MAP=$NEWBASE.dip.txt
+	for CHR in $(cat $NEWBASE.hap[12].fasta.index | sed "s/${PREF1}CHR/CHR/" | sed "s/${PREF2}CHR/CHR/" | sed "s/\./ /" | grep ^CHR | awk '{print $1;}' | sort -u); do
+	  	grep ^\|\|$PREF1$CHR $NEWBASE.hap1.txt | tee -a $MAP
+	  	grep ^\|\|$PREF2$CHR $NEWBASE.hap2.txt | tee -a $MAP
+	done
+	cat $NEWBASE.hap1.txt | grep -v ^\|\|${PREF1}CHR | tee -a $MAP
+	cat $NEWBASE.hap2.txt | grep -v ^\|\|${PREF2}CHR | tee -a $MAP
+	echo "[$(date)] Generating unsorted diploid assembly..."
+	cat $HAPBASE1.sorted.fasta $HAPBASE2.sorted.fasta > $NEWBASE.unsorted.dip.fasta
+	echo "[$(date)] Telociraptor reorganisation of diploid into paired chromosomes..."
+	python3 $SLIMSUITE/tools/telociraptor.py -seqin $NEWBASE.unsorted.dip.fasta -mapin $MAP -seqout $NEWBASE.dip.fasta -basefile $NEWBASE.dip i=-1 v=0 log=$LOG \
+		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+	exit 1
+fi
+# Move unwanted files to intermediate directory
+for EXT in gaplen.tdt gaps.tdt contigs.tdt contigs.telomeres.tdt ctgmap.txt; do
+	$SHARPCLAW/exec/backupfile.exec $HAPBASE1.sorted.$EXT $STEP
+	$SHARPCLAW/exec/backupfile.exec $HAPBASE2.sorted.$EXT $STEP
+done
+# ├── $NEWBASE.hap[12].txt
+# ├── $NEWBASE.hap[12].fasta
+# ├── $NEWBASE.hap[12].fasta.index
+# ├── $NEWBASE.hap[12].gaplen.tdt
+# ├── $NEWBASE.hap[12].gaps.tdt
+# ├── $NEWBASE.hap[12].contigs.tdt
+# ├── $NEWBASE.hap[12].telomeres.tdt
+# ├── $NEWBASE.dip.txt
+# ├── $NEWBASE.dip.fasta
+# ├── $NEWBASE.dip.tweak.txt
+# $DEV=TRUE only:
+# ├── $NEWBASE.unsorted.dip.fasta
+# ├── $NEWBASE.unsorted.dip.fasta.index
+if [ ! $DEV == "$TRUE" ]; then
+	$SHARPCLAW/exec/backupfile.exec $NEWBASE.unsorted.dip.fasta $STEP
+	$SHARPCLAW/exec/backupfile.exec $NEWBASE.unsorted.dip.fasta.index $STEP
+fi
+if [ "$RUNMODE" = "$STEP" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 4: Launch Pairtools and PreText in the background ~~~~ ###
+## Goal: Generate the contact maps for Dual curation of chromosomes.
+## Rationale: Aligns with general VGP/DToL strategy.
+## Method: Omni-C pipeline using pairtools to map HiC reads to genome then PreText and PreTextSnapshot.
+## Key inputs: Sorted diploid assembly.
+## Key outputs: HiC-mapped BAM file, PreText contact map and PreTextSnapshort images.
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=04-PreText
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.dip.mapped.PT.bam
+if [ ! -f "$KEYOUT" ]; then
+
+	# Define key new variables
+	NCPU=48; MEM=84
+	GENOME=$NEWBASE.dip.fasta
+	
+	# Execute code for step
+	if [ ! $QUEUEJOBS = "FALSE" ]; then
+		echo "[$(date)] Queueing up Pairtools and PreText to run in the background..."
+		#i# This will now run in the background. Can look for the finished version later if needed.
+		JOB=pt$(basename ${GENOME/.fasta/})
+		cat $SCRIPTDIR/jobhead.sh | sed "s/cpus-per-task=16/cpus-per-task=$NCPU/" | sed "s/mem=28G/mem=${MEM}G/" | sed "s/job-name=sharpclaw/job-name=$JOB/" | tee $JOB.sh
+		echo "$SETUPENV" | tee -a $JOB.sh
+		echo "GENOME=$GENOME" | tee -a $JOB.sh
+		echo HIC1=$HIC1 | tee -a $JOB.sh
+		echo HIC2=$HIC2 | tee -a $JOB.sh
+		echo ls -lrth $GENOME $HIC1 $HIC2 | tee -a $JOB.sh
+		cat $EXECDIR/dualpairtools.exec | tee -a $JOB.sh
+		cat $EXECDIR/pretext.exec | tee -a $JOB.sh
+		echo "echo $START | tee $RUNDIR/$STEP.done" | tee -a $JOB.sh
+		echo "echo \"[\$(date)] Step \$STEP complete\" | tee -a $RUNDIR/$STEP.done" | tee -a $JOB.sh
+		cat $SCRIPTDIR/jobtail.sh | tee -a $JOB.sh && $RUNCMD $JOB.sh
+	else
+		echo "[$(date)] Executing Pairtools workflow..."
+		source $EXECDIR/dualpairtools.exec
+		echo "[$(date)] Executing PreText workflow..."
+		source $EXECDIR/pretext.exec \
+			&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
+	fi		
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# NOTE: PreText files are cleaned up in the pretext.exec script
+if [ "$RUNMODE" = "$STEP" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 4b: Launch unsorted Pairtools and PreText in the background (DEV mode) ~~~~ ###
+## Goal: Generate the contact maps for without sorting to illustrate the utility of SharClaw.
+## Rationale: Aligns with general VGP/DToL strategy.
+## Method: Omni-C pipeline using pairtools to map HiC reads to genome then PreText and PreTextSnapshot.
+## Key inputs: Unsorted diploid assembly.
+## Key outputs: HiC-mapped BAM file, PreText contact map and PreTextSnapshort images.
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=04b-UnsortedPreText
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.unsorted.dip.mapped.PT.bam
+if [ ! -f "$KEYOUT" ] && [ "$DEV" = "TRUE" ]; then
+
+	# Define key new variables
+	NCPU=48; MEM=84
+	GENOME=$NEWBASE.unsorted.dip.fasta
+	
+	# Execute code for step
+	if [ ! $QUEUEJOBS = "FALSE" ]; then
+		JOB=pt$(basename ${GENOME/.fasta/})
+		cat $SCRIPTDIR/jobhead.sh | sed "s/cpus-per-task=16/cpus-per-task=$NCPU/" | sed "s/mem=28G/mem=${MEM}G/" | sed "s/job-name=sharpclaw/job-name=$JOB/" | tee $JOB.sh
+		echo "$SETUPENV" | tee -a $JOB.sh
+		echo "GENOME=$GENOME" | tee -a $JOB.sh
+		echo HIC1=$HIC1 | tee -a $JOB.sh
+		echo HIC2=$HIC2 | tee -a $JOB.sh
+		echo ls -lrth $GENOME $HIC1 $HIC2 | tee -a $JOB.sh
+		cat $EXECDIR/dualpairtools.exec | tee -a $JOB.sh
+		cat $EXECDIR/pretext.exec | tee -a $JOB.sh
+		echo touch $STEP.done | tee -a $JOB.sh
+		cat $SCRIPTDIR/jobtail.sh | tee -a $JOB.sh && $RUNCMD $JOB.sh
+	else
+		source $EXECDIR/dualpairtools.exec && source $EXECDIR/pretext.exec | tee -a $JOB.sh \
+			&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
+	fi		
+
+else
+	if [ "$DEV" = "TRUE" ]; then
+		echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+	else
+		echo "[$(date)] DEV=FALSE - skipping $STEP step" | tee -a $LOG
+	fi
+fi
+# NOTE: PreText files are cleaned up in the pretext.exec script
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 5: Run Compleasm on two haplotypes and combine into diploid. ~~~~ ###
+## Goal: Generate BUSCO complete genes for Basic synteny plots and SC depth estimates.
+## Rationale: BUSCO synteny is an efficient mechanism for high-level synteny analysis.
+## Method:  Compleasm genome mode run on each haplotype. Haploid tables are then combined into
+##			a diploid assembly for use with Diploidocus etc.
+## Key inputs: Haploid genome assemblies and ODB10 BUSCO dataset
+## Key outputs: BUSCO-formate full tables of BUSCO gene predictions for each haplotype
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=05-Compleasm
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.dip.$ODB10.full_table.tsv
+KEYOUTS="$NEWBASE.hap1.$ODB10.full_table.tsv $NEWBASE.hap2.$ODB10.full_table.tsv"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Execute code for step
+	for GENOME in $NEWBASE.hap[12].fasta; do
+		GENBASE=$(basename ${GENOME%.*})
+		#---------------
+		# Run Compleasm
+		RUN=run_$GENBASE.compleasm
+		THREADS=$SLURM_CPUS_PER_TASK
+		echo "[$(date)] Running Compleasm ($ODB10) on $GENOME..."
+		$COMPLEASM run -a $GENOME -o $RUN -t $THREADS -l ${ODB10/_odb10/} -L $LPATH
+		#---------------
+		# Tidy Compleasm 
+		echo "[$(date)] Cleanup $ODB10 Compleasm run $RUN"
+		CBASE=$GENBASE.$ODB10
+		cp -v $RUN/summary.txt $CBASE.compleasm.txt
+		cp -v $RUN/$ODB10/full_table.tsv $CBASE.compleasm.tsv
+		cp -v $RUN/$ODB10/full_table_busco_format.tsv $CBASE.full_table.tsv
+		tar -c $RUN | pigz > $RUN.tar.gz && rm -rf $RUN
+	done
+	# Combine outputs for Diploid
+	echo "[$(date)] Combing haploid $ODB10 Compleasm runs"
+	cp $NEWBASE.hap1.$ODB10.full_table.tsv $KEYOUT \
+		&& grep $PREF2 $NEWBASE.hap2.$ODB10.full_table.tsv >> $KEYOUT \
+		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+# Move unwanted files to intermediate directory
+for HAP in hap1 hap2; do
+	for EXT in $ODB10.compleasm.txt $ODB10.compleasm.tsv; do
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.$HAP.$EXT $STEP
+	done
+	$SHARPCLAW/exec/backupfile.exec run_$NEWBASE.$HAP.compleasm.tar.gz $STEP
+done
+# ├── $NEWBASE.hap[12].$ODB10.full_table.tsv
+# ├── $NEWBASE.dip.$ODB10.full_table.tsv
+if [ "$RUNMODE" = "$STEP" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 6: barrnap rRNA predictions for ChromSyn plots and rRNA contigs   ~~~~ ###
+## Goal: Identify rRNA repeats
+## Rationale: rRNA repeats frequently cause assembly breakdown and/or extra contigs
+## Method: Run Barrnap of each haplotype
+## Key inputs: Sorted haplotype assemblies
+## Key outputs: rRNA prediction CSV files for each haplotype
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=06-Barrnap
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.hap2.rrna.csv
+KEYOUTS="$NEWBASE.hap1.rrna.csv $NEWBASE.hap2.rrna.csv"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Execute code for step
+	mkdir $RUNDIR/$STEP; cd $RUNDIR/$STEP
+	# Run barrnap (rDNA)
+	for GENOME in ../$NEWBASE.hap[12].fasta; do
+	  	GENBASE=$(basename ${GENOME/.fasta/})
+		echo "[$(date)] Running Barrnap to find rDNA in $GENBASE..."
+		if [ ! -f "$GENBASE.full.ctg.txt" ]; then
+			sed 's/^[ACGT][ACGT][ACGT][ACGT]/GATC/' $GENOME > $GENBASE.tmp.fasta
+			$BARRNAP --kingdom euk -o $GENBASE.rrna.fa --threads $THREADS < $GENBASE.tmp.fasta | tee $GENBASE.rrna.gff
+			rm -v $GENBASE.tmp.fasta
+			#i# Make a GFF for plotting with ChromSyn and analysis with DepthKopy
+			grep -v 5S $GENBASE.rrna.gff | grep -v partial | tee $GENBASE.rdna.gff
+			#i# Find full-length rDNA repeats
+			touch $GENBASE.full.ctg.txt
+			for S in 5.8 18 28; do
+			  echo $GENBASE ${S}S "=>" $(grep "${S}S" $GENBASE.rrna.gff | grep -v partial | awk '{print $1;}' | sort | uniq -c ) | tee -a $GENBASE.rrna.full.ctg.txt
+			done
+			#i# Make a feature file for ChromSyn
+			echo SeqName,Start,End,Strand,Col,Shape | tee $GENBASE.rrna.csv
+			grep RNA $GENBASE.rrna.gff | grep -v partial | sed 's/=/ /g' | awk '{print $1,$4,$5,$7,$11;}' | sed "s/ /,/g" | sed 's/5S/"white",23/' | sed 's/5.8S/"pink",22/' | sed 's/18S/"skyblue",24/' | sed 's/28S/"seagreen",25/' | tee -a $GENBASE.rrna.csv
+		fi
+	done
+	for KEYOUT in $KEYOUTS; do
+		cp -v $KEYOUT $RUNDIR/.
+	done && echo -e "$START\n[$(date)] Step $STEP complete" | tee $RUNDIR/$STEP.done
+	cd $RUNDIR
+	
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+# ├── $NEWBASE.hap[12].rrna.csv
+if [ "$RUNMODE" = "$STEP" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 7: Simple ChromSyn Compleasm synteny plot. ~~~~ ###
+## Goal: Generate a basic synteny plot based on BUSCO genes
+## Rationale: Coarse synteny plots can identify inversions and chromosomes fusions/translocations
+## Method: Generate TIDK telomere predictions and run run ChromSyn on haplotypes
+## Key inputs: Haplotype assemblies, Telociraptor telomeres tables, Compleasm BUSCO tables, rRNA CSV files
+## Key outputs: Basic synteny plot of the two sorted haplotypes
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=07-SimpleChromSyn
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.hapcheck.pdf
+if [ ! -f "$KEYOUT" ]; then
+	# Setup run directory
+	mkdir $RUNDIR/$STEP; cd $RUNDIR/$STEP
+	# Generate TIDK telomere tables
+    echo "[$(date)] Running TIDK on Haplotypes..."
+	for GENOME in ../$NEWBASE.hap[12].fasta; do
+		GENBASE=$(basename ${GENOME/.fasta/})
+		$TIDK search -o $GENBASE -s AACCCT -d ./ -e tsv $GENOME
+		awk '$3 > 9 || $4 > 9' ${GENBASE}_telomeric_repeat_windows.tsv > ../$GENBASE.tidk.tsv
+	done
+	# Generate the FOFN files from a template:
+    echo "[$(date)] Generating FOFN files..."
+	echo $PREF1 ../$NEWBASE.hap1 | tee template.fofn
+	echo $PREF2 ../$NEWBASE.hap2 | tee -a template.fofn
+	for FOFNDATA in telomeres.tdt-sequences $ODB10.full_table.tsv-busco gaps.tdt-gaps tidk.tsv-tidk rrna.csv-ft; do
+		EXT=$(echo $FOFNDATA | awk -F '-' '{print $1;}')
+		FOFN=$(echo $FOFNDATA | awk -F '-' '{print $2;}').fofn
+		sed "s/$/.$EXT/" template.fofn | tee $FOFN
+	done
+	# Run ChromSyn
+	echo "[$(date)] Running Basic ChromSyn on Haplotypes..."
+	FOCUS=$PREF1
+	SETTINGS="pdfwidth=40 orphans=FALSE minregion=0 minbusco=1 ticks=1e7"
+	RUN=$NEWBASE
+	BASE=hapcheck
+	$RSCRIPT $SLIMSUITE/libraries/r/chromsyn.R $SETTINGS focus=$FOCUS basefile=$RUN.$BASE ybleed=1 | tee $RUN.$BASE.log \
+		&& cp -v $KEYOUT $RUNDIR/. \
+		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $RUNDIR/$STEP.done
+	cd $RUNDIR
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output file
+if [ ! -f "$KEYOUT" ]; then
+	echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+fi
+# ├── $NEWBASE.hapcheck.pdf
+if [ "$RUNMODE" = "$STEP" ] || [ "$RUNMODE" = "BASIC" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 8: Diploid Read Mapping for DepthKopy, DepthCharge and Diploidocus. ~~ ###
+## Goal: Generate haploid BAM and PAF files of mapped reads using Diploid read mapping.
+## Rationale: Mapping to the combined diploid should improve resolution of haplotype-specific sequences
+## Method: Map long reads to diploid, partition into haploids and convert to PAF.
+## Key inputs: Combined diploid assembly and raw long reads
+## Key outputs: BAM and PAF files for each haplotype of mapped long reads
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=08-ReadMapping
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.hap2.$READTYPE.paf
+KEYOUTS="$NEWBASE.hap1.$READTYPE.bam $NEWBASE.hap2.$READTYPE.bam $NEWBASE.hap1.$READTYPE.paf $KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Define key new variables inc. settings for Minimap2
+	MMSETTINGS="-I 4G -L --secondary=no"
+	SAM=$NEWBASE.dip.$READTYPE.sam
+	BAM=${SAM/.sam/.bam}
+	
+	# Execute code for step
+	echo "[$(date)] Generating diploid BAM and PAF files..."
+	$MINIMAP2 -t $THREADS $MMSETTINGS -o $SAM -ax map-$READTYPE $NEWBASE.dip.fasta $READS \
+		&& $SAMTOOLS view -bo ${SAM/.sam/.tmp.bam} --threads $THREADS -S $SAM \
+		&& $SAMTOOLS sort --threads $THREADS -o $BAM ${SAM/.sam/.tmp.bam} \
+		&& $PAFTOOLS sam2paf -L $SAM > ${SAM/.sam/.paf} \
+		&& $SAMTOOLS index -b $BAM $BAM.bai \
+		&& rm -v ${SAM/.sam/.tmp.bam} $SAM 
+	echo "[$(date)] Splitting BAM and PAF files into haplotypes..."
+	HAPBASE=$NEWBASE.hap1
+	awk '{print $1"\t1\t"$2;}' $HAPBASE.telomeres.tdt | grep -v SeqName | tee $HAPBASE.bed \
+		&& $SAMTOOLS view -h -@ $THREADS -L $HAPBASE.bed $BAM | grep -v "SN:$PREF2" | $SAMTOOLS view -hb -@ $THREADS - > $HAPBASE.$READTYPE.bam \
+		&& $SAMTOOLS index -b $HAPBASE.$READTYPE.bam $HAPBASE.$READTYPE.bam.bai
+	grep $PREF1 ${SAM/.sam/.paf} > $HAPBASE.$READTYPE.paf
+	HAPBASE=$NEWBASE.hap2
+	awk '{print $1"\t1\t"$2;}' $HAPBASE.telomeres.tdt | grep -v SeqName | tee $HAPBASE.bed \
+		&& $SAMTOOLS view -h -@ $THREADS -L $HAPBASE.bed $BAM | grep -v "SN:$PREF1" | $SAMTOOLS view -hb -@ $THREADS - > $HAPBASE.$READTYPE.bam \
+		&& $SAMTOOLS index -b $HAPBASE.$READTYPE.bam $HAPBASE.$READTYPE.bam.bai
+	grep $PREF2 ${SAM/.sam/.paf} > $HAPBASE.$READTYPE.paf
+	echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+# Move unwanted files to intermediate directory
+for EXT in hifi.bam hifi.bam.bai hifi.paf; do
+	$SHARPCLAW/exec/backupfile.exec $NEWBASE.dip.$EXT $STEP
+done
+# ├── $NEWBASE.hap[12].bed
+# ├── $NEWBASE.hap[12].hifi.bam
+# ├── $NEWBASE.hap[12].hifi.bam.bai
+# ├── $NEWBASE.hap[12].hifi.paf
+if [ "$RUNMODE" = "$STEP" ]; then
+	echo "[$(date)] RUNMODE=$RUNMODE -> Exiting run." | tee -a $LOG
+	exit 0;
+fi
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 9: DepthCharge identification of coverage dropout. ~~~~ ###
+## Goal: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=DepthCharge
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.hap2.depthcharge.tdt
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+for HAP in hap1 hap2; do
+	GENBASE=$NEWBASE.$HAP
+    $DEPTHCHARGE -seqin $GENBASE.fasta -basefile $GENBASE -threads $THREADS -paf $GENBASE.$READTYPE.paf -minspan 10 -breakmode report i=-1 v=0
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+# ├── [ 33K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.depthcharge.tdt
+# ├── [   0]  DepthCharge.done
+# ├── [ 15K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.depthcharge.tdt
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 10: KAT and selfhom file generation for DepthKopy and Diploidocus ~~~~ ###
+## Goal: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=KAT
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.hap2.self.bam
+KEYOUTS="$NEWBASE.hap1.self.bam $NEWBASE.hap2.self.bam"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+#i# Create *.kat-stats.tsv and *.kat-counts.cvg
+for HAP in hap1 hap2; do
+  if [ ! -f "$NEWBASE.$HAP.self.bam" ]; then
+	#a# $KMERREADS
+	if [ "$TRIM10X" = "T" ]; then
+		$KAT sect -t $THREADS --5ptrim 16,0 -o $NEWBASE.$HAP.kat $NEWBASE.$HAP.fasta ${KMERREADS/,/ }
+	else
+		$KAT sect -t $THREADS -o $NEWBASE.$HAP.kat $NEWBASE.$HAP.fasta ${KMERREADS/,/ }	
+	fi
+	#b# Self
+	$KAT sect -t $THREADS -o $NEWBASE.$HAP.selfkat $NEWBASE.$HAP.fasta $NEWBASE.$HAP.fasta
+	#c# Alt
+    ALTGENOME=$NEWBASE.hap1.fasta
+    if [ "$HAP" == "hap1" ]; then
+    	ALTGENOME=$NEWBASE.hap2.fasta
+    fi
+	$KAT sect -t $THREADS -o $NEWBASE.$HAP.alt.kat $NEWBASE.$HAP.fasta $ALTGENOME
+	#i# Create self homology file
+	MMSETTINGS="-aDP -I 4G -k19 -w19 -m200"
+	$MINIMAP2 -t $THREADS $MMSETTINGS $NEWBASE.$HAP.fasta $NEWBASE.$HAP.fasta | \
+		$SAMTOOLS view -b -h - | \
+		$SAMTOOLS sort - | tee $NEWBASE.$HAP.self.bam | \
+    	$SAMTOOLS flagstat - 
+    $SAMTOOLS index -b $NEWBASE.$HAP.self.bam $NEWBASE.$HAP.self.bam.bai
+  fi
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+# ├── [943M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.kat-counts.cvg
+# ├── [ 51K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.kat-stats.tsv
+# ├── [616M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.selfkat-counts.cvg
+# ├── [ 50K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.selfkat-stats.tsv
+# ├── [611M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.alt.kat-counts.cvg
+# ├── [ 49K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.alt.kat-stats.tsv
+# ├── [516M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.self.bam
+# ├── [310K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.self.bam.bai
+# ├── [907M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.kat-counts.cvg
+# ├── [ 22K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.kat-stats.tsv
+# ├── [592M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.selfkat-counts.cvg
+# ├── [ 22K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.selfkat-stats.tsv
+# ├── [592M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.alt.kat-counts.cvg
+# ├── [ 22K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.alt.kat-stats.tsv
+# ├── [295M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.self.bam
+# ├── [276K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.self.bam.bai
+# ├── [   0]  KAT.done
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 11: DepthKopy CN estimation for ChromSyn plots.                   ~~~~ ###
+## Goal: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=DepthKopy
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.hap2.fulltable.tsv
+KEYOUTS="$NEWBASE.hap1.fulltable.tsv $KEYOUT"
+if [ "$DEPTHKOPYCN" = "TRUE" ] && [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+#i# DepthKopy can run out of memory with 32 threads and 56G memory. 
+#i# Reducing the thread count here. Might need to set as a new config setting.
+#i# Will try re-running without the KAT data if fails to complete.
+FORKS=$(($NCPU/2))
+# Execute code for step
+#i# Run DepthKopy
+for HAP in hap1 hap2; do
+  if [ ! -f "$NEWBASE.$HAP.fulltable.tsv" ]; then
+    GENBASE=$NEWBASE.$HAP
+    BUSCO=$GENBASE.$ODB10.full_table.tsv
+    BAM=$GENBASE.$READTYPE.bam
+    CONTIGS=$GENBASE.contigs.tdt
+    ALTGENOME=$NEWBASE.hap1.fasta
+    if [ "$HAP" == "hap1" ]; then
+    	ALTGENOME=$NEWBASE.hap2.fasta
+    fi
+    # Try with CSI indexing if BAM.bai missing
+    if [ ! -f "$BAM.bai" ]; then
+    	$DEPTHKOPY -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads="$KMERREADS" kmeralt=$ALTGENOME regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0 bamcsi=T
+    else
+		$DEPTHKOPY -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads="$KMERREADS" kmeralt=$ALTGENOME regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0
+	fi
+	# Try re-running without the KAT data if the run failed.
+    if [ ! -f "$NEWBASE.$HAP.fulltable.csv" ]; then
+    	echo "DepthKopy run failed. Possible memory problems? Will try without KAT data. If problems remain, try increasing memory requested."
+        if [ ! -f "$BAM.bai" ]; then
+    		$DEPTHKOPY -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads= kmeralt=None kmerself=F regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0 bamcsi=T
+	    else
+			$DEPTHKOPY -threads $FORKS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM kmerreads= kmeralt=None kmerself=F regfile=Contigs:$CONTIGS reghead=seqname,start,end i=-1 v=0
+		fi
+	fi
+	
+  fi
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] WARNING: Failed to generate $KEYOUT - some later stages may be affected" | tee -a $LOG
+	fi
+done
+
+# ├── [ 140]  drMelQuin1.v240912hic.2.sharpclaw.hap1.sys.log
+# ├── [369K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.hifi.bam.csi
+# ├── [827M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.hifi.bam.fastmp
+# ├── [558M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.fasthom
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.plots
+# │   ├── [4.0K]  hexplots
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.BUSCO.MeanX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Contigs.MeanX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Duplicated.MeanX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Sequences.MeanX.png
+# │   │   ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.BUSCO.MedX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.BUSCO.ModeX.png
+# │   │   ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Contigs.MedX.png
+# │   │   ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Duplicated.MedX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Duplicated.ModeX.png
+# │   │   ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Sequences.MedX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Windows.MeanX.png
+# │   │   ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Windows.MedX.png
+# │   │   ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.BUSCO.DensX.png
+# │   │   ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Contigs.DensX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Contigs.ModeX.png
+# │   │   ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Duplicated.DensX.png
+# │   │   ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Sequences.DensX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Sequences.ModeX.png
+# │   │   ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Windows.DensX.png
+# │   │   ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Windows.ModeX.png
+# │   │   ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.BUSCO.HomPC.png
+# │   │   ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Contigs.HomPC.png
+# │   │   ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Duplicated.HomPC.png
+# │   │   ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Sequences.HomPC.png
+# │   │   └── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.Windows.HomPC.png
+# │   ├── [ 73K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.raw.png
+# │   ├── [ 48K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.scdepth.png
+# │   ├── [ 28K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MeanX.pdf
+# │   ├── [ 55K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MeanX.png
+# │   ├── [ 29K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MedX.pdf
+# │   ├── [ 55K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MedX.png
+# │   ├── [ 27K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.ModeX.pdf
+# │   ├── [ 52K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.ModeX.png
+# │   ├── [ 29K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.CN.pdf
+# │   ├── [ 52K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.CN.png
+# │   ├── [ 29K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.DensX.pdf
+# │   ├── [ 56K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.DensX.png
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.HomPC.pdf
+# │   └── [ 44K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.HomPC.png
+# ├── [ 12K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.busco.dupcnv.tsv
+# ├── [405K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.busco.regcnv.tsv
+# ├── [ 29K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.drMelQuin1.v240912hic.2.sharpclaw.hap1.contigs.regcnv.tsv
+# ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.sequences.regcnv.tsv
+# ├── [222K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.windows.regcnv.tsv
+# ├── [722K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.xlsx
+# ├── [444K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.fulltable.tsv
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 12: SynBad Gap classification.                                    ~~~~ ###
+## Goal: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=SynBad
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.synbad.hit.gap.tdt
+KEYOUTS="$NEWBASE.synbad.qry.gap.tdt $NEWBASE.synbad.hit.gap.tdt"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+BASE1=$NEWBASE.hap1
+BASE2=$NEWBASE.hap2
+ls -lrth $BASE1.fasta $BASE1.$READTYPE.bam $BASE1.$READTYPE.paf $BASE1.$ODB10.full_table.tsv $BASE1.mapped.PT.bam
+ls -lrth $BASE2.fasta $BASE2.$READTYPE.bam $BASE2.$READTYPE.paf $BASE2.$ODB10.full_table.tsv $BASE2.mapped.PT.bam
+# 
+# Run SynBad. Will switch of use of BAM for depths if DEPTHKOPYCN!=TRUE 
+if [ "$DEPTHKOPYCN" = "TRUE" ]; then
+	$SYNBAD genome1=$BASE1.fasta bam1=$BASE1.$READTYPE.bam paf1=$BASE1.$READTYPE.paf hicbam1=$BASE1.mapped.PT.bam busco1=$BASE1.$ODB10.full_table.tsv genome2=$BASE2.fasta bam2=$BASE2.$READTYPE.bam paf2=$BASE2.$READTYPE.paf hicbam2=$BASE2.mapped.PT.bam busco2=$BASE2.$ODB10.full_table.tsv basefile=$NEWBASE.synbad chr1=$PREF1 chr2=$PREF2 correct=invert spannedflank=100 synreadspan=3 i=-1 v=0 threads=$THREADS
+else
+	$SYNBAD genome1=$BASE1.fasta bam1=None paf1=$BASE1.$READTYPE.paf hicbam1=$BASE1.mapped.PT.bam busco1=$BASE1.$ODB10.full_table.tsv genome2=$BASE2.fasta bam2=None paf2=$BASE2.$READTYPE.paf hicbam2=$BASE2.mapped.PT.bam busco2=$BASE2.$ODB10.full_table.tsv basefile=$NEWBASE.synbad chr1=$PREF1 chr2=$PREF2 correct=invert spannedflank=100 synreadspan=3 i=-1 v=0 threads=$THREADS
+fi
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+# ├── [1.7K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.gap_pos.tdt
+# ├── [2.4K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.checkpos.tdt
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.hap1_spanid
+# │   ├── [  35]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MQUIH1CHR01.16842859-16843058.span.id
+# │   ├── [  34]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MQUIH1CHR01.25208892-25209091.span.id
+# │   ├── [  35]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MQUIH1CHR04.14244115-14244314.span.id
+# │   ├── [  35]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MQUIH1CHR06.17483196-17483395.span.id
+# │   ├── [  35]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MQUIH1CHR06.1843872-1844071.span.id
+# │   └── [  69]  drMelQuin1.v240912hic.2.sharpclaw.hap1.MQUIH1CHR07.15852262-15852461.span.id
+# ├── [2.0K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.checkpos.tdt
+# ├── [1.4K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.gap_pos.tdt
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.hap2_spanid
+# │   ├── [ 171]  drMelQuin1.v240912hic.2.sharpclaw.hap2.MQUIH2CHR01.10578298-10578497.span.id
+# │   ├── [ 104]  drMelQuin1.v240912hic.2.sharpclaw.hap2.MQUIH2CHR02.17613094-17613293.span.id
+# │   ├── [ 448]  drMelQuin1.v240912hic.2.sharpclaw.hap2.MQUIH2CHR04.5433856-5434055.span.id
+# │   ├── [  35]  drMelQuin1.v240912hic.2.sharpclaw.hap2.MQUIH2CHR04.7251422-7251621.span.id
+# │   ├── [  34]  drMelQuin1.v240912hic.2.sharpclaw.hap2.MQUIH2CHR06.1729998-1730197.span.id
+# │   └── [ 174]  drMelQuin1.v240912hic.2.sharpclaw.hap2.MQUIH2SCF11.83422-83621.span.id
+# ├── [4.0K]  tmp
+# ├── [ 157]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.paf.cmd
+# ├── [ 74M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.paf
+# ├── [ 67M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.local.tdt
+# ├── [426K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.hitunique.tdt
+# ├── [683K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.qryunique.tdt
+# ├── [ 46K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.hitsum.tdt
+# ├── [1.7M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.gablam.tdt
+# ├── [ 26M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.map.unique.tdt
+# ├── [ 43K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.contigs.tdt
+# ├── [278M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.contigs.fasta
+# ├── [ 39K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.bed
+# ├── [8.1M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.fasta
+# ├── [ 20K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.contigs.tdt
+# ├── [272M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.contigs.fasta
+# ├── [ 18K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.bed
+# ├── [3.6M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.fasta
+# ├── [ 28K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.tdt
+# ├── [ 13K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.contigs.fasta.index
+# ├── [ 62K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.tdt
+# ├── [ 39K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.map.txt
+# ├── [8.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.map.fasta.index
+# ├── [ 18K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.map.txt
+# ├── [278M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.map.fasta
+# ├── [ 21K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.map.telociraptor.txt
+# ├── [5.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.contigs.fasta.index
+# ├── [3.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.map.fasta.index
+# ├── [272M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.map.fasta
+# ├── [9.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.map.telociraptor.txt
+# ├── [ 140]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.sys.log
+# ├── [841K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.hifi.bam.bai
+# ├── [   9]  drMelQuin1.v240912hic.2.sharpclaw.hap1.hifi.bam.fastmp.scdepth
+# ├── [405K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.busco.regcnv.tsv
+# ├── [ 12K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.busco.dupcnv.tsv
+# ├── [ 95K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.checkcnv.tdt
+# ├── [245K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.fulltable.tsv
+# ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.sequences.regcnv.tsv
+# ├── [494K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.xlsx
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.plots
+# │   ├── [ 73K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.raw.png
+# │   ├── [ 48K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.scdepth.png
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.MeanX.pdf
+# │   ├── [ 50K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.MeanX.png
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.MedX.pdf
+# │   ├── [ 50K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.MedX.png
+# │   ├── [ 23K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.ModeX.pdf
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.CN.pdf
+# │   ├── [ 48K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.CN.png
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.DensX.pdf
+# │   ├── [ 49K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.DensX.png
+# │   ├── [ 45K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.ModeX.png
+# │   ├── [ 21K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.HomPC.pdf
+# │   ├── [ 39K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.HomPC.png
+# │   └── [4.0K]  hexplots
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.BUSCO.MeanX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.BUSCO.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Duplicated.MeanX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Duplicated.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Regions.MeanX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Sequences.MeanX.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.BUSCO.DensX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.BUSCO.ModeX.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Duplicated.DensX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Duplicated.ModeX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Regions.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Regions.ModeX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Sequences.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Sequences.ModeX.png
+# │       ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.BUSCO.HomPC.png
+# │       ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Duplicated.HomPC.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Regions.DensX.png
+# │       ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Regions.HomPC.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Sequences.DensX.png
+# │       └── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.flanks.Sequences.HomPC.png
+# ├── [   9]  drMelQuin1.v240912hic.2.sharpclaw.hap2.hifi.bam.fastmp.scdepth
+# ├── [404K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.busco.regcnv.tsv
+# ├── [ 16K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.busco.dupcnv.tsv
+# ├── [ 43K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.checkcnv.tdt
+# ├── [202K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.fulltable.tsv
+# ├── [ 11K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.sequences.regcnv.tsv
+# ├── [426K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.xlsx
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.plots
+# │   ├── [ 76K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.raw.png
+# │   ├── [ 50K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.scdepth.png
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.MeanX.pdf
+# │   ├── [ 53K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.MeanX.png
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.MedX.pdf
+# │   ├── [ 48K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.MedX.png
+# │   ├── [ 24K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.ModeX.pdf
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.CN.pdf
+# │   ├── [ 48K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.CN.png
+# │   ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.DensX.pdf
+# │   ├── [ 52K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.DensX.png
+# │   ├── [ 49K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.ModeX.png
+# │   ├── [ 22K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.HomPC.pdf
+# │   ├── [ 43K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.HomPC.png
+# │   └── [4.0K]  hexplots
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.BUSCO.MeanX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.BUSCO.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Duplicated.MeanX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Regions.MeanX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Sequences.MeanX.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.BUSCO.DensX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.BUSCO.ModeX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Duplicated.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Duplicated.ModeX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Regions.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Regions.ModeX.png
+# │       ├── [6.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Sequences.MedX.png
+# │       ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Sequences.ModeX.png
+# │       ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.BUSCO.HomPC.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Duplicated.DensX.png
+# │       ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Duplicated.HomPC.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Regions.DensX.png
+# │       ├── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Regions.HomPC.png
+# │       ├── [6.8K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Sequences.DensX.png
+# │       └── [6.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.flanks.Sequences.HomPC.png
+# ├── [414K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.full.tdt
+# ├── [668K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.full.tdt
+# ├── [ 20K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.blocks.tdt
+# ├── [3.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.gap.tdt
+# ├── [9.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.gap.telociraptor.txt
+# ├── [170K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.tdt
+# ├── [ 44K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.blocks.tdt
+# ├── [4.2K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.gap.tdt
+# ├── [ 21K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.gap.telociraptor.txt
+# ├── [ 39K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.synbad.txt
+# ├── [286K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.tdt
+# ├── [ 436]  drMelQuin1.v240912hic.2.sharpclaw.synbad.summary.tdt
+# ├── [8.9K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.synbad.fasta.index
+# ├── [ 18K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.synbad.txt
+# ├── [ 331]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.corrections.tdt
+# ├── [278M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.synbad.fasta
+# ├── [ 21K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.qry.synbad.telociraptor.txt
+# ├── [3.7K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.synbad.fasta.index
+# ├── [ 194]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.corrections.tdt
+# ├── [272M]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.synbad.fasta
+# ├── [9.5K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.hit.synbad.telociraptor.txt
+# ├── [ 48K]  drMelQuin1.v240912hic.2.sharpclaw.synbad.log
+# ├── [   0]  SynBad.done
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 13: Detailed ChromSyn plots with DepthCharge, CN and SynBad       ~~~~ ###
+## Goal: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=ChromSynBad
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.qcmode.pdf
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+echo "Generating updated gaps and features files..."
+cp -v $NEWBASE.synbad.qry.gap.tdt $NEWBASE.hap1.synbadgaps.tsv
+cp -v $NEWBASE.synbad.hit.gap.tdt $NEWBASE.hap2.synbadgaps.tsv
+for BASE in $NEWBASE.hap1 $NEWBASE.hap2; do
+	cp -v $BASE.rrna.csv $BASE.ft.csv
+	grep bad $BASE.depthcharge.tdt | awk '{print $1","$2","$3",.,black,-2";}' | tee -a $BASE.ft.csv
+done
+#i# Colour sequences by type
+for HAP in hap1 hap2; do
+	TFILE=$NEWBASE.$HAP.telomeres.tdt
+	TSV=$NEWBASE.$HAP.sequences.tsv
+	head -n 1 $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tCol";}' | tee $TSV
+	grep -E "CHR[0-9]+\s" $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tpalegreen";}' | tee -a $TSV
+	grep -E "CHR[0-9]+\." $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tyellow2";}' | tee -a $TSV
+	grep SCF $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\ttan";}' | tee -a $TSV
+	grep CTG $TFILE | awk '{print $1"\t"$2"\t"$3"\t"$4"\tivory2";}' | tee -a $TSV
+done
+#i# Update FOFN
+for FOFNDATA in ft.csv-fullft synbadgaps.tsv-synbad sequences.tsv-colseq; do
+	EXT=$(echo $FOFNDATA | awk -F '-' '{print $1;}')
+	FOFN=$(echo $FOFNDATA | awk -F '-' '{print $2;}').fofn
+	sed "s/$/.$EXT/" template.fofn | tee $FOFN
+done
+#i# CN data
+if [ "$DEPTHKOPYCN" = "TRUE" ]; then
+	cat $NEWBASE.hap[12].fulltable.tsv | head -n 1 > $NEWBASE.cndata.tsv
+	sed 's/^/$PREF1\t/' $NEWBASE.hap1.fulltable.tsv | grep -v SeqName >> $NEWBASE.cndata.tsv
+	sed 's/^/$PREF2\t/' $NEWBASE.hap2.fulltable.tsv | grep -v SeqName >> $NEWBASE.cndata.tsv
+fi
+
+echo "Generating regdata file for ChromSyn from 1kb+ SynBad hit regions..."
+QRY=$PREF1; HIT=$PREF2
+TSV=$NEWBASE.regdata.tsv
+echo "Genome, HitGenome, SeqName, Start, End, Strand, Hit, HitStart, HitEnd" | sed "s/, /\t/g" | tee $TSV
+awk '$9 > 1000 { print $1"\t"$2"\t"$3"\t"$7"\t"$4"\t"$5"\t"$6; }' $NEWBASE.synbad.qry.full.tdt | sed "s/^/$PREF1\t$PREF2\t/" | grep -v Qry | tee -a $TSV
+awk '$9 > 1000 { print $4"\t"$5"\t"$6"\t"$7"\t"$1"\t"$2"\t"$3; }' $NEWBASE.synbad.hit.full.tdt | sed "s/^/$PREF2\t$PREF1\t/" | grep -v Qry | tee -a $TSV
+
+echo "Full assembly ChromSyn plot in QC mode with 'good' gaps hidden"
+FOCUS=$QRY
+#SEQORDER=$(grep CHR $NEWBASE.hap1.sequences.tsv | awk '{print $1;}' | sort | tr '\n' ',' | sed 's/,$//')
+#RESTRICT=$(cat $NEWBASE.hap[12].sequences.tsv | grep CHR | awk '{print $1;}' | sort | tr '\n' ',' | sed 's/,$//')
+RESTRICT=$(cat $NEWBASE.hap[12].$ODB10.full_table.tsv | grep CHR | awk '{print $3;}' | sort | uniq | tr '\n' ',' | sed 's/,$//')
+SEQORDER=$(cat $NEWBASE.hap1.$ODB10.full_table.tsv | grep CHR | awk '{print $3;}' | sort | uniq | tr '\n' ',' | sed 's/,$//')
+SETTINGS="pdfwidth=40 orphans=FALSE ticks=1e7 minlen=0 maxregions=8000 regdata=$NEWBASE.regdata.tsv minregion=1 ybleed=1 focus=$FOCUS seqorder=$SEQORDER chromfill=Col regmirror=F sequences=colseq.fofn gaps=synbad.fofn ft=fullft.fofn restrict=$RESTRICT"
+if [ "$DEPTHKOPYCN" = "TRUE" ]; then 
+	SETTINGS="$SETTINGS cndata=$NEWBASE.cndata.tsv"
+fi
+echo $SETTINGS
+RUN=$NEWBASE
+BASE=qcmode
+$RSCRIPT $SLIMSUITE/libraries/r/chromsyn.R $SETTINGS basefile=$RUN.$BASE qcmode=T | tee $RUN.$BASE.log
+
+echo "Chromosome-level ChromSyn plots"
+for CHR in $(grep -E "CHR[0-9]+\s" $NEWBASE.hap1.telomeres.tdt | awk '{print $1;}' | sed "s/$PREF1//" | sort -u); do
+	BASE=$CHR
+	#RESTRICT=$(cat $NEWBASE.hap[12].sequences.tsv | grep $CHR[^0-9] | awk '{print $1;}' | sort | tr '\n' ',' | sed 's/,$//')
+	RESTRICT=$(cat $NEWBASE.hap[12].$ODB10.full_table.tsv | grep $CHR[^0-9] | awk '{print $3;}' | sort | uniq | tr '\n' ',' | sed 's/,$//')
+	echo "$CHR: $RESTRICT"
+	if [ ! -f "$RUN.$BASE.pdf" ]; then
+		$RSCRIPT $SLIMSUITE/libraries/r/chromsyn.R $SETTINGS basefile=$RUN.$BASE restrict=$RESTRICT | tee $RUN.$BASE.log
+	fi
+done
+
+touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files - non-fatal if failed to generate
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		#exit 1
+	fi
+done
+
+# ├── [185K]  drMelQuin1.v240912hic.2.sharpclaw.CHR01.chromsyn.xlsx
+# ├── [ 45K]  drMelQuin1.v240912hic.2.sharpclaw.CHR01.pdf
+# ├── [9.5K]  drMelQuin1.v240912hic.2.sharpclaw.CHR01.log
+# ├── [1.3M]  drMelQuin1.v240912hic.2.sharpclaw.CHR01.png
+# ├── [121K]  drMelQuin1.v240912hic.2.sharpclaw.CHR02.chromsyn.xlsx
+# ├── [ 27K]  drMelQuin1.v240912hic.2.sharpclaw.CHR02.pdf
+# ├── [9.4K]  drMelQuin1.v240912hic.2.sharpclaw.CHR02.log
+# ├── [1.7M]  drMelQuin1.v240912hic.2.sharpclaw.CHR02.png
+# ├── [ 80K]  drMelQuin1.v240912hic.2.sharpclaw.CHR03.chromsyn.xlsx
+# ├── [ 16K]  drMelQuin1.v240912hic.2.sharpclaw.CHR03.pdf
+# ├── [9.4K]  drMelQuin1.v240912hic.2.sharpclaw.CHR03.log
+# ├── [923K]  drMelQuin1.v240912hic.2.sharpclaw.CHR03.png
+# ├── [132K]  drMelQuin1.v240912hic.2.sharpclaw.CHR04.chromsyn.xlsx
+# ├── [ 29K]  drMelQuin1.v240912hic.2.sharpclaw.CHR04.pdf
+# ├── [9.4K]  drMelQuin1.v240912hic.2.sharpclaw.CHR04.log
+# ├── [3.0M]  drMelQuin1.v240912hic.2.sharpclaw.CHR04.png
+# ├── [ 89K]  drMelQuin1.v240912hic.2.sharpclaw.CHR05.chromsyn.xlsx
+# ├── [ 20K]  drMelQuin1.v240912hic.2.sharpclaw.CHR05.pdf
+# ├── [9.5K]  drMelQuin1.v240912hic.2.sharpclaw.CHR05.log
+# ├── [1.5M]  drMelQuin1.v240912hic.2.sharpclaw.CHR05.png
+# ├── [ 85K]  drMelQuin1.v240912hic.2.sharpclaw.CHR06.chromsyn.xlsx
+# ├── [ 19K]  drMelQuin1.v240912hic.2.sharpclaw.CHR06.pdf
+# ├── [9.4K]  drMelQuin1.v240912hic.2.sharpclaw.CHR06.log
+# ├── [1.2M]  drMelQuin1.v240912hic.2.sharpclaw.CHR06.png
+# ├── [ 65K]  drMelQuin1.v240912hic.2.sharpclaw.CHR07.chromsyn.xlsx
+# ├── [ 14K]  drMelQuin1.v240912hic.2.sharpclaw.CHR07.pdf
+# ├── [9.4K]  drMelQuin1.v240912hic.2.sharpclaw.CHR07.log
+# ├── [1.3M]  drMelQuin1.v240912hic.2.sharpclaw.CHR07.png
+# ├── [ 56K]  drMelQuin1.v240912hic.2.sharpclaw.CHR08.chromsyn.xlsx
+# ├── [ 12K]  drMelQuin1.v240912hic.2.sharpclaw.CHR08.pdf
+# ├── [9.4K]  drMelQuin1.v240912hic.2.sharpclaw.CHR08.log
+# ├── [748K]  drMelQuin1.v240912hic.2.sharpclaw.CHR08.png
+# ├── [ 59K]  drMelQuin1.v240912hic.2.sharpclaw.CHR09.chromsyn.xlsx
+# ├── [ 13K]  drMelQuin1.v240912hic.2.sharpclaw.CHR09.pdf
+# ├── [9.5K]  drMelQuin1.v240912hic.2.sharpclaw.CHR09.log
+# ├── [678K]  drMelQuin1.v240912hic.2.sharpclaw.CHR09.png
+# ├── [ 50K]  drMelQuin1.v240912hic.2.sharpclaw.CHR10.chromsyn.xlsx
+# ├── [ 12K]  drMelQuin1.v240912hic.2.sharpclaw.CHR10.pdf
+# ├── [9.4K]  drMelQuin1.v240912hic.2.sharpclaw.CHR10.log
+# ├── [747K]  drMelQuin1.v240912hic.2.sharpclaw.CHR10.png
+# ├── [146K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.ft.csv
+# ├── [ 15K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.sequences.tsv
+# ├── [4.2K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.synbadgaps.tsv
+# ├── [ 96K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.ft.csv
+# ├── [3.5K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.synbadgaps.tsv
+# ├── [ 120]  colseq.fofn
+# ├── [928K]  drMelQuin1.v240912hic.2.sharpclaw.cndata.tsv
+# ├── [6.4K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.sequences.tsv
+# ├── [904K]  drMelQuin1.v240912hic.2.sharpclaw.regdata.tsv
+# ├── [ 106]  fullft.fofn
+# ├── [ 122]  synbad.fofn
+# ├── [772K]  drMelQuin1.v240912hic.2.sharpclaw.qcmode.chromsyn.xlsx
+# ├── [   0]  ChromSynBad.done
+# ├── [ 10K]  drMelQuin1.v240912hic.2.sharpclaw.qcmode.log
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 14: Diploidocus classification for reduced PreText.               ~~~~ ###
+## Goal: 
+## Rationale: 
+## Method: 
+## Key inputs: BUSCO and BAM files for each haplotype
+## - BUSCO=$NEWBASE.$HAP.$ODB10.full_table.tsv
+## - BAM=$NEWBASE.$HAP.bam
+## - SC Depth = $NEWBASE.$HAP.fastmp.scdepth
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=Diploidocus
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.hap2.ratings.tdt
+KEYOUTS="$NEWBASE.hap1.ratings.tdt $NEWBASE.hap2.ratings.tdt"
+if [ ! -f "$KEYOUT" ]; then
+
+# Define key new variables
+
+# Execute code for step
+for HAP in hap1 hap2; do
+    GENBASE=$NEWBASE.$HAP
+    BUSCO=$GENBASE.$ODB10.full_table.tsv
+    BAM=$GENBASE.$READTYPE.bam
+    if [ ! -f "$BAM.fastmp.scdepth" ]; then
+    	echo "$BAM.fastmp.scdepth missing!"
+    	exit 1
+    fi
+    SCDEP=$(printf "%.0f" "$(cat $BAM.fastmp.scdepth)")
+    #i# Need to pre-run purge_haplotigs:1.1.2.sif
+    echo "Running $HAP purge_haplotigs for Diploidocus..."
+    # Set and check the files to be made
+    PHTSV="$GENBASE.purge.reassignments.tsv"
+    PHCSV="$GENBASE.purge.coverage_stats.csv"
+    PHCOV="$GENBASE.$READTYPE.bam.gencov"
+    if [ -f "$PHTSV" ] && [ -f "$PHCSV" ] && [ -f "$PHCOV" ]; then
+    	echo "Previous results files found:"
+    	ls -lrth $PHCOV $PHCSV $PHTSV
+    else
+		PHLOW=$(($SCDEP/4))
+		PHMID=$((3*$SCDEP/4))
+		PHHIGH=$((2*$SCDEP))
+		echo "$HAP: Low=${PHLOW}X; Mid=${PHMID}X; High=${PHHIGH}X; SC=${SCDEP}X)"
+		PHMAX=200
+		if [ $PHHIGH gt 100 ]; then
+			$PHMAX=$((2*$PHHIGH))
+		fi
+		PHDIR=purge_$GENBASE
+		mkdir $PHDIR; cd $PHDIR
+		ln -s ../$BAM .
+		ln -s ../$GENBASE.fasta .
+		$PURGEHAPLOTIGS hist -b $BAM -g $GENBASE.fasta -t $THREADS -d $PHMAX \
+			&& $PURGEHAPLOTIGS cov -i $BAM.gencov -l $PHLOW -m $PHMID -h $PHHIGH -o $GENBASE.purge.coverage_stats.csv -j 80 -s 80 \
+			&& $PURGEHAPLOTIGS purge -g $GENBASE.fasta -c $GENBASE.purge.coverage_stats.csv -t $THREADS -o $GENBASE.purge -a 95
+		cd $RUNDIR
+	fi
+	if [ -d "tmp_purge_haplotigs" ]; then
+		echo "[$(date)] Deleting tmp_purge_haplotigs/ and contents..."
+		rm -rf tmp_purge_haplotigs
+	fi
+	
+	#i# Pre-run bbmap:39.01.sif pileup.sh
+	DEPFILE=$GENBASE.depth.tdt
+	DEPSTAT=$GENBASE.depth.stats
+	if [ -f "$DEPFILE" ]; then
+    	echo "[$(date)] BBMap pileup.sh results files found: $DEPFILE"
+    else
+    	$SAMTOOLS view -h $BAM | $BBMAPPILEUP in=stdin out=$DEPFILE 2>&1 | tee $DEPSTAT
+    fi
+
+	#i# Run Diploidocus
+    echo "Running $HAP Diploidocus..."
+    SCDEP=$(printf "%.2f" "$(cat $BAM.fastmp.scdepth)")
+    # Try with CSI indexing if BAM.bai missing
+    if [ ! -f "$BAM.bai" ]; then
+		$DIPLOIDOCUS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM -scdepth $SCDEP kmerreads=$KMERREADS -threads $THREADS -runmode diploidocus -pretrim F -veccheck F i=-1 v=0 bamcsi=T
+	else
+		$DIPLOIDOCUS -seqin $GENBASE.fasta -basefile $GENBASE -busco $BUSCO -bam $BAM -scdepth $SCDEP kmerreads=$KMERREADS -threads $THREADS -runmode diploidocus -pretrim F -veccheck F i=-1 v=0
+	fi	
+done
+
+python3 $SLIMSUITE/tools/seqsuite.py summarise batchrun="$NEWBASE.*.diploidocus.fasta,$NEWBASE.*.core.fasta,$NEWBASE.*.quarantine.fasta,$NEWBASE.*.repeats.fasta,$NEWBASE.*.junk.fasta" dna basefile=$NEWBASE.diploidocus i=-1 v=0 log=$LOG
+sed -i 's/.fasta//' $NEWBASE.diploidocus.summarise.tdt
+column -t $NEWBASE.diploidocus.summarise.tdt && touch $STEP.done
+
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+# ├── [ 16K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.fasta.fai
+# ├── [1.5M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.hifi.bam.gencov
+# ├── [137K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.hifi.bam.histogram.png
+# ├── [ 23K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.purge.coverage_stats.csv
+# ├── [4.0K]  tmp_purge_haplotigs
+# │   ├── [4.0K]  CONTIGS
+# │   ├── [4.0K]  COV
+# │   ├── [4.0K]  TMP_ALN
+# │   ├── [838M]  assembly.4G.mmi
+# │   ├── [4.0K]  STDERR
+# │   │   ├── [   0]  samtoolsDepth.stderr
+# │   │   ├── [ 569]  minimap2.idx.stderr
+# │   │   ├── [ 593]  minimap2.stderr
+# │   │   ├── [   0]  samtools.faidx.stderr
+# │   │   └── [   0]  gen_histogram.stderr
+# │   ├── [ 45M]  minimap2.4G.paf
+# │   ├── [433K]  hit_summary.tsv
+# │   ├── [5.6K]  minimap2.4G.paf.index
+# │   ├── [4.0K]  MISC
+# │   │   ├── [2.0K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.hifi.bam.histogram.csv
+# │   │   └── [1.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.hifi.bam.histogram.csv
+# │   ├── [ 762]  purge_haplotigs_hist.log
+# │   └── [1.8K]  purge_haplotigs_purge.log
+# ├── [8.6K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.purge.contig_associations.log
+# ├── [ 11M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.purge.haplotigs.fasta
+# ├── [6.8M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.purge.artefacts.fasta
+# ├── [260M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.purge.fasta
+# ├── [ 19K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.purge.reassignments.tsv
+# ├── [ 27K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.depth.tdt
+# ├── [ 808]  drMelQuin1.v240912hic.2.sharpclaw.hap1.depth.stats
+# ├── [129K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.diploidocus.tdt
+# ├── [ 25K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.ratings.tdt
+# ├── [259M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.core.fasta
+# ├── [264M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.diploidocus.fasta
+# ├── [9.5M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.junk.fasta
+# ├── [118K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.log
+# ├── [5.5M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.quarantine.fasta
+# ├── [4.1M]  drMelQuin1.v240912hic.2.sharpclaw.hap1.repeats.fasta
+# ├── [6.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.fasta.fai
+# ├── [636K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.hifi.bam.gencov
+# ├── [133K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.hifi.bam.histogram.png
+# ├── [9.9K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.purge.coverage_stats.csv
+# ├── [   0]  drMelQuin1.v240912hic.2.sharpclaw.hap2.purge.contig_associations.log
+# ├── [   0]  drMelQuin1.v240912hic.2.sharpclaw.hap2.purge.haplotigs.fasta
+# ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.purge.artefacts.fasta
+# ├── [269M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.purge.fasta
+# ├── [4.4K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.purge.reassignments.tsv
+# ├── [ 18K]  shdrMelQuin1.v240912hic.2.sharpclaw-16905877.err
+# ├── [ 12K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.depth.tdt
+# ├── [ 808]  drMelQuin1.v240912hic.2.sharpclaw.hap2.depth.stats
+# ├── [ 46K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.diploidocus.tdt
+# ├── [   0]  drMelQuin1.v240912hic.2.sharpclaw.hap2.quarantine.fasta
+# ├── [ 10K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.ratings.tdt
+# ├── [263M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.core.fasta
+# ├── [268M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.diploidocus.fasta
+# ├── [3.7M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.junk.fasta
+# ├── [ 63K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.log
+# ├── [5.2M]  drMelQuin1.v240912hic.2.sharpclaw.hap2.repeats.fasta
+# ├── [2.2K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.diploidocus.fasta.index
+# ├── [2.6K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.diploidocus.fasta.index
+# ├── [ 813]  drMelQuin1.v240912hic.2.sharpclaw.hap1.core.fasta.index
+# ├── [1.1K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.core.fasta.index
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.junk.fasta.index
+# ├── [2.1K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.quarantine.fasta.index
+# ├── [1.2K]  drMelQuin1.v240912hic.2.sharpclaw.hap1.repeats.fasta.index
+# ├── [1.1K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.junk.fasta.index
+# ├── [1.3K]  drMelQuin1.v240912hic.2.sharpclaw.hap2.repeats.fasta.index
+# ├── [   0]  Diploidocus.done
+
+
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 15: Reduced PreText generation without repeat scaffolds.          ~~~~ ###
+## Goal: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=ReducedPreText
+START="[$(date)] Step $STEP"
+KEYOUT=$NEWBASE.dip.diploidocus.map.pretext
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ] && [ -f "$NEWBASE.dip.mapped.PT.bam" ]; then
+
+# Define key new variables
+PTBAM=$NEWBASE.dip.mapped.PT.bam
+
+# Execute code for step
+echo "Defining BED files for $NEWBASE reduced PreText..."
+cat $NEWBASE.hap[12].ratings.tdt | grep keep | awk '{print $1"\t1\t"$2;}' > $NEWBASE.diploidocus.bed
+cp $NEWBASE.diploidocus.bed $NEWBASE.nojunk.bed
+cat $NEWBASE.hap[12].ratings.tdt | grep quarantine | awk '{print $1"\t1\t"$2;}' >> $NEWBASE.nojunk.bed
+cp $NEWBASE.nojunk.bed $NEWBASE.norepeat.bed
+cat $NEWBASE.hap[12].ratings.tdt | grep junk | awk '{print $1"\t1\t"$2;}' >> $NEWBASE.norepeat.bed
+echo "Reduced PT BAM files and PreText"
+for BED in norepeat nojunk diploidocus; do
+    BEDPTBAM=$NEWBASE.dip.$BED.PT.bam
+	$SAMTOOLS view -h -@ $THREADS -L $NEWBASE.$BED.bed $PTBAM > $BEDPTBAM \
+		&& ls -lrth $BEDPTBAM \
+		&& $SAMTOOLS view -h $BEDPTBAM | \
+			$PRETEXTMAP -o "$NEWBASE.dip.$BED.map.pretext" --sortby nosort \
+		&& $PRETEXTSNAPSHOT -m "$NEWBASE.dip.$BED.map.pretext" -o "$NEWBASE.dip.$BED.snapshot" --prefix $NEWBASE.dip.${BED}.snapshot.
+done
+
+touch $STEP.done
+
+else
+	if [ -f "$NEWBASE.dip.mapped.PT.bam" ]; then
+		echo "[$(date)] $NEWBASE.dip.mapped.PT.bam not yet generated - skipping $STEP step" | tee -a $LOG
+	else
+		echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+	fi
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+# ├── [1.9K]  drMelQuin1.v240912hic.2.sharpclaw.diploidocus.bed
+# ├── [1.3K]  drMelQuin1.v240912hic.2.sharpclaw.diploidocus.summarise.tdt
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.nojunk.bed
+# ├── [9.2K]  drMelQuin1.v240912hic.2.sharpclaw.norepeat.bed
+# ├── [396G]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat.PT.bam
+# ├── [ 64M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat.map.pretext
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat.output
+# │   ├── [159K]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotFullMap.png
+# │   ├── [1.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR01.png
+# │   ├── [2.3M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR01.2.png
+# │   ├── [2.5M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR01.png
+# │   ├── [2.5M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR02.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR03.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR02.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR03.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR04.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR05.png
+# │   ├── [2.7M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR06.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR04.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR05.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR07.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR08.png
+# │   ├── [2.7M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR06.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR07.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR09.png
+# │   ├── [2.1M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH1CHR10.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR08.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR09.png
+# │   └── [2.1M]  drMelQuin1.v240912hic.2.sharpclaw.dip.norepeat_snapshotMQUIH2CHR10.png
+# ├── [337G]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk.PT.bam
+# ├── [ 64M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk.map.pretext
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk.output
+# │   ├── [159K]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotFullMap.png
+# │   ├── [1.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR01.png
+# │   ├── [2.5M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR02.png
+# │   ├── [2.3M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR01.2.png
+# │   ├── [2.5M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR01.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR03.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR04.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR02.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR03.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR05.png
+# │   ├── [2.7M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR06.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR04.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR05.png
+# │   ├── [2.7M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR06.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR07.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR08.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR07.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR08.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR09.png
+# │   ├── [2.1M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH1CHR10.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR09.png
+# │   └── [2.1M]  drMelQuin1.v240912hic.2.sharpclaw.dip.nojunk_snapshotMQUIH2CHR10.png
+# ├── [325G]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus.PT.bam
+# ├── [ 64M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus.map.pretext
+# ├── [4.0K]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus.output
+# │   ├── [159K]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotFullMap.png
+# │   ├── [1.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR01.png
+# │   ├── [2.5M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR02.png
+# │   ├── [2.3M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR01.2.png
+# │   ├── [2.5M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR01.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR03.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR04.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR02.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR03.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR05.png
+# │   ├── [2.7M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR06.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR04.png
+# │   ├── [2.8M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR05.png
+# │   ├── [2.7M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR06.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR07.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR08.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR07.png
+# │   ├── [2.6M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR08.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR09.png
+# │   ├── [2.1M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH1CHR10.png
+# │   ├── [2.4M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR09.png
+# │   └── [2.1M]  drMelQuin1.v240912hic.2.sharpclaw.dip.diploidocus_snapshotMQUIH2CHR10.png
+# ├── [360K]  drMelQuin1.v240912hic.2.sharpclaw.log
+# ├── [   0]  ReducedPreText.done
+
+
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 16: Final cleanup of intermediate files and reporting.            ~~~~ ###
+## Goal: Tidy up all the remaining output into the subset of what is required.
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+
+#i# Delete or tarball intermediate directories based on $BACKUP setting.
+
+#i# NOTE: This will prevent re-running of the workflow, so make it a toggle.
+
+####################################### ::: FINISH ::: #############################################
+echo "#---------------" | tee -a $LOG
+echo "[$(date)]: Run complete" | tee -a $LOG
+echo "#---------------" | tee -a $LOG
+exit 0
+
+####################################### ::: TEMPLATE CODE ::: ######################################
+
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP n: Template. ~~~~ ###
+## Goal: 
+## Approach: 
+## Rationale: 
+## Method: 
+## Key inputs: 
+## Key outputs: 
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+STEP=
+KEYOUT=
+KEYOUTS="$KEYOUT"
+if [ ! -f "$KEYOUT" ]; then
+
+	# Execute code for step
+	echo "[$(date)] Running $STEP ..." | tee -a $LOG
+	touch $STEP.done
+
+else
+	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
+fi
+# Check for key output files
+for KEYOUT in $KEYOUTS; do
+	if [ ! -f "$KEYOUT" ]; then
+		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+		exit 1
+	fi
+done
+
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+

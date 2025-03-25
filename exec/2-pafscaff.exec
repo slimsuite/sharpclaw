@@ -1,0 +1,12 @@
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+### ~~~~ STEP 2: PAFScaff scaffold each haplotype against the primary assembly. ~~~~ ###
+### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
+singularity run $SING/minimap2:2.26.sif minimap2 --cs -N 100 -p 0.0001 -x asm20 -t $THREADS $NEWBASE.hap1.tweak.fasta $HAP2 > $HAPBASE2.paf
+python3 $SLIMSUITE/tools/pafscaff.py -pafin $HAPBASE2.paf -seqin $HAP2 -reference $NEWBASE.hap1.tweak.fasta -basefile $HAPBASE2 -refprefix $PREF1 -newprefix $PREF2 -unplaced ${PREF2}SCF -ctgprefix ${PREF2}CTG -threads $THREADS scaffold=F purechrom=T -i -1 -v 0
+cat $HAPBASE2.placed.fasta $HAPBASE2.unplaced.fasta > $NEWBASE.hap2.fasta
+singularity run $SING/minimap2:2.26.sif minimap2 --cs -N 100 -p 0.0001 -x asm20 -t $THREADS $HAPBASE2.fasta $NEWBASE.hap1.tweak.fasta > $HAPBASE1.paf
+python3 $SLIMSUITE/tools/pafscaff.py -pafin $HAPBASE1.paf -seqin $NEWBASE.hap1.tweak.fasta -reference $HAPBASE2.fasta -basefile $HAPBASE1 -refprefix $PREF2 -newprefix $PREF1 -unplaced ${PREF1}SCF -ctgprefix ${PREF1}CTG -threads $THREADS scaffold=F purechrom=T -i -1 -v 0
+cat $HAPBASE1.placed.fasta $HAPBASE1.unplaced.fasta > $NEWBASE.hap1.fasta
+python3 $SLIMSUITE/tools/seqsuite.py summarise batchrun="$NEWBASE.hap1.fasta,$NEWBASE.hap2.fasta" dna basefile=$NEWBASE i=-1 v=0
+sed -i 's/.fasta//' $NEWBASE.summarise.tdt
+column -t $NEWBASE.summarise.tdt && touch $JOB.done
