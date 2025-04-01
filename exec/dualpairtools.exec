@@ -29,8 +29,10 @@ echo "Temp dir: $TMPDIR"
 ## 9. Generating the final bam file
 ## 10. Index the bam file
 GENBASE=$(basename ${GENOME%.*})
+PTBAM=$GENBASE.mapped.PT.bam
 
 echo "Assembly: $GENOME"
+echo "Generating: $PTBAM"
 samtools faidx $GENOME \
 && cut -f1,2 $GENOME.fai > "$GENBASE.genome" \
 && bwa index $GENOME \
@@ -40,8 +42,7 @@ samtools faidx $GENOME \
 && pairtools dedup --nproc-in 24 --nproc-out 24 --mark-dups --output-stats "$GENBASE.stats.txt" --output "$GENBASE.dedup.pairsam" "$GENBASE.sorted.pairsam" \
 && pairtools split --nproc-in 24 --nproc-out 24 --output-pairs "$GENBASE.mapped.pairs" --output-sam "$GENBASE.unsorted.bam" "$GENBASE.dedup.pairsam" \
 && samtools sort -@48 -T  "$TMPDIR/temp.bam" -o "$GENBASE.mapped.PT.bam" "$GENBASE.unsorted.bam" \
-&& samtools index "$GENBASE.mapped.PT.bam" \
-PTBAM=$GENBASE.mapped.PT.bam
+&& samtools index $PTBAM $PTBAM.bai
 
 # --------------
 # Cleanup the output files
