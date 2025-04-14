@@ -2,8 +2,8 @@
 ### SHARPCLAW: Synteny, Homology And Repeat Pre-curation ~~~~~ ###
 ###            for Chromosome-Level Assembly Workflows   ~~~~~ ###
 ### MAIN WORKFLOW EXECUTION SCRIPT                       ~~~~~ ###
-### VERSION: 0.1.1                                       ~~~~~ ###
-### LAST EDIT: 26/03/25                                  ~~~~~ ###
+### VERSION: 0.1.2                                       ~~~~~ ###
+### LAST EDIT: 14/04/25                                  ~~~~~ ###
 ### AUTHORS: Richard Edwards 2024                        ~~~~~ ###
 ### CONTACT: rich.edwards@uwa.edu.au                     ~~~~~ ###
 ##################################################################
@@ -13,6 +13,7 @@
 ####################################### ::: HISTORY ::: ############################################
 # v0.1.0 : Initial working version.
 # v0.1.1 : Some bug fixes. Added documentation and cleanup.
+# v0.1.2 : Moved some of the cleanup and renamed some outputs.
 
 ####################################### ::: TO DO ::: ##############################################
 # [Y] : Generate and test full working version.
@@ -163,7 +164,16 @@ if [ ! -f "$KEYOUT" ]; then
 	echo "[$(date)] size-sorting and renaming Hap1 with Telociraptor..."
 	python3 $SLIMSUITE/tools/telociraptor.py -seqin $HAP1 -chromsort -minchrom $MINCHROM -basefile $NEWBASE.chromsort -newprefix $PREF1 i=-1 v=0 log=$LOG \
 		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
- 
+
+	# Move unwanted files to intermediate directory
+	for EXT in gaplen.tdt gaps.tdt contigs.tdt contigs.fasta.* telomeres.tdt; do
+		$SHARPCLAW/exec/backupfile.exec $HAPBASE1.$EXT $STEP
+	done
+	if [ -f "$NEWBASE.chromsort.tweak.telomeres.tdt" ]; then
+		mv -v $NEWBASE.chromsort.* $STEP/
+		cp -v $STEP/$KEYOUT .
+	fi
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step"
 fi
@@ -172,14 +182,7 @@ if [ ! -f "$KEYOUT" ]; then
 	echo "[$(date)] Failed to generate $KEYOUT"
 	exit 1
 fi
-# Move unwanted files to intermediate directory
-for EXT in gaplen.tdt gaps.tdt contigs.tdt contigs.fasta.* telomeres.tdt; do
-	$SHARPCLAW/exec/backupfile.exec $HAPBASE1.$EXT $STEP
-done
-if [ -f "$NEWBASE.chromsort.tweak.telomeres.tdt" ]; then
-	mv -v $NEWBASE.chromsort.* $STEP/
-	cp -v $STEP/$KEYOUT .
-fi
+
 # Outputs:
 # ├── $NEWBASE.chromsort.tweak.fasta
 if [ "$RUNMODE" = "$STEP" ]; then
@@ -226,6 +229,12 @@ if [ ! -f "$KEYOUT" ]; then
 		&& column -t $NEWBASE.summarise.tdt \
 		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Move unwanted files to intermediate directory
+	for EXT in paf placed.fasta unplaced.fasta placed.fasta.index unplaced.fasta.index; do
+		$SHARPCLAW/exec/backupfile.exec $HAPBASE1.$EXT $STEP
+		$SHARPCLAW/exec/backupfile.exec $HAPBASE2.$EXT $STEP
+	done
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
@@ -236,11 +245,7 @@ for KEYOUT in $KEYOUTS; do
 		exit 1
 	fi
 done
-# Move unwanted files to intermediate directory
-for EXT in paf placed.fasta unplaced.fasta placed.fasta.index unplaced.fasta.index; do
-	$SHARPCLAW/exec/backupfile.exec $HAPBASE1.$EXT $STEP
-	$SHARPCLAW/exec/backupfile.exec $HAPBASE2.$EXT $STEP
-done
+
 # Outputs:
 # ├── $HAPBASE[12].scaffolds.tdt
 # ├── $HAPBASE[12].sorted.fasta
@@ -299,6 +304,12 @@ if [ ! -f "$KEYOUT" ]; then
 	python3 $SLIMSUITE/tools/telociraptor.py -seqin $NEWBASE.unsorted.dip.fasta -mapin $MAP -seqout $NEWBASE.dip.fasta -basefile $NEWBASE.dip i=-1 v=0 log=$LOG \
 		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Move unwanted files to intermediate directory
+	for EXT in gaplen.tdt gaps.tdt contigs.tdt contigs.telomeres.tdt ctgmap.txt; do
+		$SHARPCLAW/exec/backupfile.exec $HAPBASE1.sorted.$EXT $STEP
+		$SHARPCLAW/exec/backupfile.exec $HAPBASE2.sorted.$EXT $STEP
+	done
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
@@ -307,11 +318,7 @@ if [ ! -f "$KEYOUT" ]; then
 	echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
 	exit 1
 fi
-# Move unwanted files to intermediate directory
-for EXT in gaplen.tdt gaps.tdt contigs.tdt contigs.telomeres.tdt ctgmap.txt; do
-	$SHARPCLAW/exec/backupfile.exec $HAPBASE1.sorted.$EXT $STEP
-	$SHARPCLAW/exec/backupfile.exec $HAPBASE2.sorted.$EXT $STEP
-done
+
 # Outputs:
 # ├── $NEWBASE.hap[12].txt
 # ├── $NEWBASE.hap[12].fasta
@@ -484,6 +491,14 @@ if [ ! -f "$KEYOUT" ]; then
 		&& grep $PREF2 $NEWBASE.hap2.$ODB10.full_table.tsv >> $KEYOUT \
 		&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Move unwanted files to intermediate directory
+	for HAP in hap1 hap2; do
+		for EXT in $ODB10.compleasm.txt $ODB10.compleasm.tsv; do
+			$SHARPCLAW/exec/backupfile.exec $NEWBASE.$HAP.$EXT $STEP
+		done
+		$SHARPCLAW/exec/backupfile.exec run_$NEWBASE.$HAP.compleasm.tar.gz $STEP
+	done
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
@@ -494,13 +509,7 @@ for KEYOUT in $KEYOUTS; do
 		exit 1
 	fi
 done
-# Move unwanted files to intermediate directory
-for HAP in hap1 hap2; do
-	for EXT in $ODB10.compleasm.txt $ODB10.compleasm.tsv; do
-		$SHARPCLAW/exec/backupfile.exec $NEWBASE.$HAP.$EXT $STEP
-	done
-	$SHARPCLAW/exec/backupfile.exec run_$NEWBASE.$HAP.compleasm.tar.gz $STEP
-done
+
 # Outputs:
 # ├── $NEWBASE.hap[12].$ODB10.full_table.tsv
 # ├── $NEWBASE.dip.$ODB10.full_table.tsv
@@ -550,17 +559,19 @@ if [ ! -f "$KEYOUT" ]; then
 		cp -v $KEYOUT $RUNDIR/.
 	done && echo -e "$START\n[$(date)] Step $STEP complete" | tee $RUNDIR/$STEP.done
 	cd $RUNDIR
-	
+
+	# Check for key output files
+	for KEYOUT in $KEYOUTS; do
+		if [ ! -f "$KEYOUT" ]; then
+			echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
+			exit 1
+		fi
+	done
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
-# Check for key output files
-for KEYOUT in $KEYOUTS; do
-	if [ ! -f "$KEYOUT" ]; then
-		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
-		exit 1
-	fi
-done
+
 # Outputs:
 # ├── $NEWBASE.hap[12].rrna.csv
 if [ "$RUNMODE" = "$STEP" ]; then
@@ -664,6 +675,11 @@ if [ ! -f "$KEYOUT" ]; then
 	grep $PREF2 ${SAM/.sam/.paf} > $HAPBASE.$READTYPE.paf
 	echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Move unwanted files to intermediate directory
+	for EXT in hifi.bam hifi.bam.bai hifi.paf; do
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.dip.$EXT $STEP
+	done
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
@@ -674,10 +690,7 @@ for KEYOUT in $KEYOUTS; do
 		exit 1
 	fi
 done
-# Move unwanted files to intermediate directory
-for EXT in hifi.bam hifi.bam.bai hifi.paf; do
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.dip.$EXT $STEP
-done
+
 # Outputs:
 # ├── $NEWBASE.hap[12].bed
 # ├── $NEWBASE.hap[12].hifi.bam
@@ -711,6 +724,12 @@ if [ ! -f "$KEYOUT" ]; then
 	done
 	echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Move unwanted files to intermediate directory
+	for EXT in gaplen.tdt log; do
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
+	done
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
@@ -721,11 +740,7 @@ for KEYOUT in $KEYOUTS; do
 		exit 1
 	fi
 done
-# Move unwanted files to intermediate directory
-for EXT in gaplen.tdt log; do
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
-done
+
 # Outputs:
 # ├── $NEWBASE.hap[12].contigs.tdt 
 # ├── $NEWBASE.hap[12].depthcharge.tdt
@@ -861,6 +876,21 @@ if [ "$DEPTHKOPYCN" = "TRUE" ] && [ ! -f "$KEYOUT" ]; then
 	done
 	echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Tidy up some of the output files
+	rmdir -v tmpdir
+	for HAP in hap1 hap2; do
+		GENBASE=$NEWBASE.$HAP
+		cp -v $GENBASE.plots/$GENBASE.CN.pdf .
+		echo "[$(date)] Tarballing $GENBASE.plots/ directory..."
+		tar -cv $GENBASE.plots | pigz > $GENBASE.plots.tar.gz && rm -vrf $GENBASE.plots/* && rmdir -v $GENBASE.plots
+	done
+	# Move unwanted files to intermediate directory
+	for EXT in sys.log busco.dupcnv.tsv  ; do
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
+	done
+	mv -v $NEWBASE.hap[12].*.regcnv.tsv $STEP/.
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
@@ -872,20 +902,7 @@ for KEYOUT in $KEYOUTS; do
 		exit 1
 	fi
 done
-# Tidy up some of the output files
-rmdir -v tmpdir
-for HAP in hap1 hap2; do
-	GENBASE=$NEWBASE.$HAP
-	cp -v $GENBASE.plots/$GENBASE.CN.pdf .
-	echo "[$(date)] Tarballing $GENBASE.plots/ directory..."
-	tar -cv $GENBASE.plots | pigz > $GENBASE.plots.tar.gz && rm -vrf $GENBASE.plots/* && rmdir -v $GENBASE.plots
-done
-# Move unwanted files to intermediate directory
-for EXT in sys.log busco.dupcnv.tsv  ; do
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
-done
-mv -v $NEWBASE.hap[12].*.regcnv.tsv $STEP/.
+
 # Outputs:
 # ├── $NEWBASE.hap[12].CN.pdf 
 # ├── $NEWBASE.hap[12].xlsx
@@ -935,27 +952,28 @@ if [ ! -f "$KEYOUT" ]; then
 		fi
 	done
 
+	# Tidy up some of the output files
+	rmdir -v tmp/
+	for HAP in qry hit; do
+		GENBASE=$NEWBASE.synbad.$HAP.flanks
+		echo "[$(date)] Tarballing $GENBASE.plots/ directory..."
+		tar -cv $GENBASE.plots | pigz > $GENBASE.plots.tar.gz && rm -v $GENBASE.plots/* && rmdir -v $GENBASE.plots
+	done
+	# Move unwanted files to intermediate directory
+	for EXT in .gap_pos.tdt .checkpos.tdt _spanid ; do
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1$EXT $STEP
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2$EXT $STEP
+	done
+	cp -v $NEWBASE.synbad.qry.gap.tdt $NEWBASE.hap1.synbadgaps.tsv
+	cp -v $NEWBASE.synbad.hit.gap.tdt $NEWBASE.hap2.synbadgaps.tsv
+	mv -v $NEWBASE.synbad.qry.* $STEP/.
+	mv -v $NEWBASE.synbad.hit.* $STEP/.
+	mv -v $NEWBASE.synbad.map.* $STEP/.
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
 
-# Tidy up some of the output files
-rmdir -v tmp/
-for HAP in qry hit; do
-	GENBASE=$NEWBASE.synbad.$HAP.flanks
-	echo "[$(date)] Tarballing $GENBASE.plots/ directory..."
-	tar -cv $GENBASE.plots | pigz > $GENBASE.plots.tar.gz && rm -v $GENBASE.plots/* && rmdir -v $GENBASE.plots
-done
-# Move unwanted files to intermediate directory
-for EXT in .gap_pos.tdt .checkpos.tdt _spanid ; do
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1$EXT $STEP
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2$EXT $STEP
-done
-cp -v $NEWBASE.synbad.qry.gap.tdt $NEWBASE.hap1.synbadgaps.tsv
-cp -v $NEWBASE.synbad.hit.gap.tdt $NEWBASE.hap2.synbadgaps.tsv
-mv -v $NEWBASE.synbad.qry.* $STEP/.
-mv -v $NEWBASE.synbad.hit.* $STEP/.
-mv -v $NEWBASE.synbad.map.* $STEP/.
 # Outputs:
 # ├── $NEWBASE.synbad.hap[12].synbadgaps.tsv
 # ├── $NEWBASE.synbad.summary.tdt
@@ -1049,6 +1067,16 @@ if [ ! -f "$KEYOUT" ]; then
 
 	echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Tidy up some of the output files
+	# Move unwanted files to intermediate directory
+	for EXT in ft.csv sequences.tsv ; do
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
+	done
+	mv -v *.fofn $STEP/.
+	mv -v $NEWBASE.CHR* $STEP/.
+	cp -v $STEP/$NEWBASE.CHR*.pdf .
+
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
 fi
@@ -1060,15 +1088,6 @@ for KEYOUT in $KEYOUTS; do
 	fi
 done
 
-# Tidy up some of the output files
-# Move unwanted files to intermediate directory
-for EXT in ft.csv sequences.tsv ; do
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
-done
-mv -v *.fofn $STEP/.
-mv -v $NEWBASE.CHR* $STEP/.
-cp -v $STEP/$NEWBASE.CHR*.pdf .
 # Outputs:
 # ├── $NEWBASE.CHR*.pdf
 # ├── $NEWBASE.qcmode.chromsyn.xlsx
@@ -1167,6 +1186,17 @@ if [ ! -f "$KEYOUT" ]; then
 	sed -i 's/.fasta//' $NEWBASE.diploidocus.summarise.tdt
 	column -t $NEWBASE.diploidocus.summarise.tdt && echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 
+	# Tidy up some of the output files
+	rm -rf purge_$NEWBASE.hap[12]/tmp_purge_haplotigs
+	# Move unwanted files to intermediate directory
+	for EXT in depth.tdt depth.stats  ; do
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
+		$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
+	done
+	mv -v $NEWBASE.hap[12].purge.* $STEP/.
+	for DIP in core junk repeats quarantine ; do
+		mv -v $NEWBASE.hap[12].$DIP.fasta* $STEP/.
+	done
 
 else
 	echo "[$(date)] File found: $KEYOUT - skipping $STEP step" | tee -a $LOG
@@ -1177,18 +1207,6 @@ for KEYOUT in $KEYOUTS; do
 		echo "[$(date)] Failed to generate $KEYOUT" | tee -a $LOG
 		exit 1
 	fi
-done
-
-# Tidy up some of the output files
-rm -rf purge_$NEWBASE.hap[12]/tmp_purge_haplotigs
-# Move unwanted files to intermediate directory
-for EXT in depth.tdt depth.stats  ; do
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap1.$EXT $STEP
-	$SHARPCLAW/exec/backupfile.exec $NEWBASE.hap2.$EXT $STEP
-done
-mv -v $NEWBASE.hap[12].purge.* $STEP/.
-for DIP in core junk repeats quarantine ; do
-	mv -v $NEWBASE.hap[12].$DIP.fasta* $STEP/.
 done
 
 # Outputs:
@@ -1216,7 +1234,7 @@ fi
 
 STEP=15-ReducedPreText
 START="[$(date)] Step $STEP"
-KEYOUT=$NEWBASE.dip.diploidocus.map.pretext
+KEYOUT=$NEWBASE.dip.diploidocus.filter.pretext
 KEYOUTS="$KEYOUT"
 if [ ! -f "$KEYOUT" ] && [ -f "$NEWBASE.dip.mapped.PT.bam" ]; then
 
@@ -1232,14 +1250,15 @@ if [ ! -f "$KEYOUT" ] && [ -f "$NEWBASE.dip.mapped.PT.bam" ]; then
 	cat $NEWBASE.hap[12].ratings.tdt | grep junk | awk '{print $1"\t1\t"$2;}' >> $NEWBASE.norepeat.bed
 	echo "Reduced PT BAM files and PreText"
 	for BED in norepeat nojunk diploidocus; do
-		BEDPTBAM=$NEWBASE.dip.$BED.PT.bam
+		BEDPTBAM=$NEWBASE.dip.$BED.PT.filter.bam
 		echo "Generating $BEDPTBAM and PreText snapshots from $PTBAM and $NEWBASE.$BED.bed..."
-		$SAMTOOLS view -h -@ $THREADS -L $NEWBASE.$BED.bed $PTBAM > $BEDPTBAM \
+		$SAMTOOLS view -h -@ $THREADS -L $NEWBASE.$BED.bed -b -o $BEDPTBAM $PTBAM  \
 			&& ls -lrth $BEDPTBAM \
 			&& $SAMTOOLS view -h $BEDPTBAM | \
-				$PRETEXTMAP -o "$NEWBASE.dip.$BED.map.pretext" --sortby nosort \
-			&& $PRETEXTSNAPSHOT -m "$NEWBASE.dip.$BED.map.pretext" -o "$NEWBASE.dip.$BED.snapshot" --prefix $NEWBASE.dip.${BED}.snapshot.
-		ls -lrth $NEWBASE.dip.$BED.map.pretext
+				$PRETEXTMAP -o "$NEWBASE.dip.$BED.filter.pretext" --sortby nosort \
+			&& $PRETEXTSNAPSHOT -m "$NEWBASE.dip.$BED.filter.pretext" -o "$NEWBASE.dip.$BED.snapshot" --prefix $NEWBASE.dip.${BED}.snapshot. \
+			&& rm -v $BEDPTBAM
+		ls -lrth $NEWBASE.dip.$BED.filter.pretext
 	done
 
 	echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
@@ -1262,14 +1281,14 @@ done
 
 # NOTE: PreText files are cleaned up in the pretext.exec script
 # Outputs:
-# ├── $NEWBASE.dip.diploidocus.PT.bam
-# ├── $NEWBASE.dip.diploidocus.map.pretext
+# ├── $NEWBASE.dip.diploidocus.PT.filter.bam
+# ├── $NEWBASE.dip.diploidocus.filter.pretext
 # ├── $NEWBASE.dip.diploidocus.snapshot.tar.gz
-# ├── $NEWBASE.dip.nojunk.PT.bam
-# ├── $NEWBASE.dip.nojunk.map.pretext
+# ├── $NEWBASE.dip.nojunk.PT.filter.bam
+# ├── $NEWBASE.dip.nojunk.filter.pretext
 # ├── $NEWBASE.dip.nojunk.snapshot.tar.gz
-# ├── $NEWBASE.dip.norepeat.PT.bam
-# ├── $NEWBASE.dip.norepeat.map.pretext
+# ├── $NEWBASE.dip.norepeat.PT.filter.bam
+# ├── $NEWBASE.dip.norepeat.filter.pretext
 # ├── $NEWBASE.dip.norepeat.snapshot.tar.gz
 # ├── $NEWBASE.diploidocus.bed
 # ├── $NEWBASE.nojunk.bed
