@@ -1,0 +1,59 @@
+# Recommended resources: 48 PPN; 96G memory
+# The following variables should be set:
+# >> $GENOME = fasta file to map reads onto
+# >> $HIC1 = R1 HiC fastq.gz
+# >> $HIC2 = R1 HiC fastq.gz
+
+#---------------
+# This used a conda environment "pairtools" with BWA and pairtools installed
+
+#---------------
+# Define path to temp directory
+GENBASE=$(basename ${GENOME%.*})
+TMPDIR=$(pwd)/tmp$GENBASE
+mkdir $TMPDIR
+echo "Temp dir: $TMPDIR"
+
+# --------------
+# Run the Omni-C pipeline
+# 1. Create an index for reference - samtools faidx
+# 2. Use the index to generate a genome file - cut
+# 3. Generate bwa index files - bwa index
+# 4. Alignment - bwa mem
+# 5. Recording valid ligation events - pairtools parse
+# 6. Sorting the pairsam file - pairtools sort
+# 7. Removig PCR duplicates - pairtools dedup
+# 8. Generating .pairs and bam files
+# 9. Generating the final bam file
+# 10. Index the bam file
+GENBASE=$(basename ${GENOME%.*})
+PTBAM=$GENBASE.mapped.PT.bam
+
+echo "Assembly: $GENOME"
+echo "Generating: $PTBAM"
+$SAMTOOLS faidx $GENOME \
+&& cut -f1,2 $GENOME.fai > "$GENBASE.genome" \
+&& $BWA index $GENOME \
+&& $BWA mem -5SP -T0 -t64 $GENOME $HIC1 $HIC2 -o "$GENBASE.aligned.sam" \
+&& $PAIRTOOLS parse --min-mapq 40 --walks-policy 5unique --max-inter-align-gap 30 --nproc-in 8 --nproc-out 8 --chroms-path "$GENBASE.genome" "$GENBASE.aligned.sam" >  "$GENBASE.parsed.pairsam" \
+&& $PAIRTOOLS sort --nproc 16 --tmpdir=$TMPDIR  "$GENBASE.parsed.pairsam" > "$GENBASE.sorted.pairsam" \
+&& $PAIRTOOLS dedup --nproc-in 8 --nproc-out 8 --mark-dups --output-stats "$GENBASE.mapped.PT.stats.txt" --output "$GENBASE.dedup.pairsam" "$GENBASE.sorted.pairsam" \
+&& $PAIRTOOLS split --nproc-in 8 --nproc-out 8 --output-pairs "$GENBASE.mapped.pairs" --output-sam "$GENBASE.unsorted.bam" "$GENBASE.dedup.pairsam" \
+&& $SAMTOOLS sort -@16 -T  "$TMPDIR/temp.bam" -o "$PTBAM" "$GENBASE.unsorted.bam" \
+&& $SAMTOOLS index $PTBAM $PTBAM.bai
+
+
+# --------------
+# Cleanup the output files
+if [ -f "$PTBAM" ]; then
+	echo "[$(date)] Cleaning up PairTools intermediates..."
+	rm -v $GENBASE.*sam $GENBASE.mapped.pairs $GENBASE.unsorted.bam
+	rm -rvf $TMPDIR/ 
+	for EXT in bwt amb ann pac sa; do
+		rm -v $GENOME.$EXT
+	done
+fi
+
+#---------------
+#Successfully finished
+ls -lrth $GENBASE.*

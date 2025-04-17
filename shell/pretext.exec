@@ -1,0 +1,21 @@
+# The following variables should be set:
+# # >> $GENBASE = prefix for output. Expects $GENBASE.mapped.PT.bam.
+# #---------------
+# Generate a contact map and snapshot
+PTBAM=$GENBASE.mapped.PT.bam
+if [ "$PTCONDA" = "TRUE" ]; then
+	ls -lrth $PTBAM \
+	&& $SAMTOOLS view -h $PTBAM -o ${PTBAM/.bam/.sam} \
+	&& cat ${PTBAM/.bam/.sam} | $PRETEXTMAP -o "$GENBASE.map.pretext" --sortby nosort \
+	&& $PRETEXTSNAPSHOT -m "$GENBASE.map.pretext" -o "$GENBASE.snapshot" --prefix ${GENBASE}.snapshot. \
+	&& rm -v ${PTBAM/.bam/.sam} &
+else
+	ls -lrth $PTBAM \
+	&& $SAMTOOLS view -h $PTBAM | $PRETEXTMAP -o "$GENBASE.map.pretext" --sortby nosort \
+	&& $PRETEXTSNAPSHOT -m "$GENBASE.map.pretext" -o "$GENBASE.snapshot" --prefix ${GENBASE}.snapshot.
+fi
+
+if [ -d "$GENBASE.snapshot" ]; then
+	echo "[$(date)] Tarballing $GENBASE.snapshot/ PreText snapshot directory..."
+	tar -cv $GENBASE.snapshot | pigz > $GENBASE.snapshot.tar.gz && rm -v $GENBASE.snapshot/* && rmdir -v $GENBASE.snapshot
+fi

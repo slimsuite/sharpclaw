@@ -2,8 +2,8 @@
 ### SHARPCLAW: Synteny, Homology And Repeat Pre-curation ~~~~~ ###
 ###            for Chromosome-Level Assembly Workflows   ~~~~~ ###
 ### MAIN WORKFLOW EXECUTION SCRIPT                       ~~~~~ ###
-### VERSION: 0.1.2                                       ~~~~~ ###
-### LAST EDIT: 14/04/25                                  ~~~~~ ###
+### VERSION: 0.1.3                                       ~~~~~ ###
+### LAST EDIT: 16/04/25                                  ~~~~~ ###
 ### AUTHORS: Richard Edwards 2024                        ~~~~~ ###
 ### CONTACT: rich.edwards@uwa.edu.au                     ~~~~~ ###
 ##################################################################
@@ -14,21 +14,26 @@
 # v0.1.0 : Initial working version.
 # v0.1.1 : Some bug fixes. Added documentation and cleanup.
 # v0.1.2 : Moved some of the cleanup and renamed some outputs.
+# v0.1.3 : Tweaked some of the paths and checks for conda compatibility.
 
 ####################################### ::: TO DO ::: ##############################################
 # [Y] : Generate and test full working version.
 # [Y] : Add robust checks for input files and software.
-# [ ] : Consider partitioning stages into subdirectories.
+# [Y] : Consider partitioning stages into subdirectories.
 # [ ] : Make the telomere fixing an option. Better default might be off but clear reporting.
 # [ ] : Add a DIPLOIDBAM setting to enable traditional haploid running of Diploidocus
 # [ ] : Add a NUMTFinder run if MTDNA is provided.
 # [Y] : Add an option to run PreText etc. in-line rather than launching a job.
 # [ ] : Replace hard-coded step numbers with step counter for future flexibility.
+# [ ] : Separate out the preflight checks into preflight.exec so it can be run separately.
 
 ####################################### ::: SETUP ::: ##############################################
 
 ### ~~~~~~~ Fix settings ~~~~~~~~ ###
 #i# These are settings introduced during development that will ultimately be in the config file.
+if [ -z "$THREADS" ]; then
+	THREADS=$NCPU
+fi
 if [ -z "$DEPTHKOPYCN" ]; then
 	DEPTHKOPYCN=TRUE
 fi
@@ -69,18 +74,21 @@ if [ -z "$TESTV" ]; then
 	echo "ERROR! Cannot run: $MINIMAP2"; exit 1
 fi
 #i# Compleasm
-TESTV=$($COMPLEASM --help) && TESTV="found" && echo "[$(date)] Compleasm: $TESTV"
+TESTV=$($COMPLEASM --version) && echo "[$(date)] Compleasm: $TESTV"
 if [ -z "$TESTV" ]; then
-	echo "ERROR! Cannot run: $COMPLEASM"; exit 1
+	TESTV=$($COMPLEASM --help) && TESTV="found" && echo "[$(date)] Compleasm: $TESTV"
+	if [ -z "$TESTV" ]; then
+		echo "ERROR! Cannot run: $COMPLEASM"; exit 1
+	fi
 fi
 #i# Barrnap
-TESTV=$($BARRNAP --version) && TESTV="found" && echo "[$(date)] barrnap: $TESTV"
-if [ -z "$TESTV" ]; then
+TESTV=$($BARRNAP --version 2>&1 | head -n1 ) && echo "[$(date)] barrnap: $TESTV"
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
 	echo "ERROR! Cannot run: $BARRNAP"; exit 1
 fi
 #i# TIDK
 TESTV=$($TIDK --version) && echo "[$(date)] TIDK: $TESTV"
-if [ -z "$TESTV" ]; then
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
 	echo "ERROR! Cannot run: $TIDK"; exit 1
 fi
 #i# Rscript
@@ -110,7 +118,7 @@ if [ -z "$TESTV" ]; then
 fi
 #i# KAT
 TESTV=$($KAT --version) && echo "[$(date)] KAT: $TESTV"
-if [ -z "$TESTV" ]; then
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
 	echo "ERROR! Cannot run: $KAT"; exit 1
 fi
 #i# SynBad
@@ -120,7 +128,7 @@ if [ -z "$TESTV" ]; then
 fi
 #i# purge_haploptigs
 TESTV=$($PURGEHAPLOTIGS 2>&1 | grep Purge | head -n1 ) && echo "[$(date)] purge_haploptigs: $TESTV"
-if [ -z "$TESTV" ]; then
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
 	echo "ERROR! Cannot run: $PURGEHAPLOTIGS"; exit 1
 fi
 #i# bbmap pileup.sh
@@ -135,14 +143,25 @@ if [ -z "$TESTV" ]; then
 fi
 #i# PreTextMap
 TESTV=$($PRETEXTMAP | head -n 1) && TESTV="found" && echo "[$(date)] PreTextMap: $TESTV"
-if [ -z "$TESTV" ]; then
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
 	echo "ERROR! Cannot run: $PRETEXTMAP"; exit 1
 fi
 #i# PretextSnapshot
 TESTV=$($PRETEXTSNAPSHOT --version | head -n 1) && echo "[$(date)] PretextSnapshot: $TESTV"
-if [ -z "$TESTV" ]; then
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
 	echo "ERROR! Cannot run: $PRETEXTSNAPSHOT"; exit 1
 fi
+#i# Pairtools
+TESTV=$($PAIRTOOLS --version | head -n 1) && echo "[$(date)] pairtools: $TESTV"
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
+	echo "ERROR! Cannot run: $PAIRTOOLS"; exit 1
+fi
+#i# bwa
+TESTV=$($BWA 2>&1 | grep Version | head -n1 ) && echo "[$(date)] bwa: $TESTV"
+if [ -z "$TESTV" ] && [ ! "$DEV" = "TRUE" ]; then
+	echo "ERROR! Cannot run: $BWA"; exit 1
+fi
+
 
 ####################################### ::: SHARPCLAW ::: ##############################################
 
@@ -380,9 +399,9 @@ if [ ! -f "$KEYOUT" ]; then
 		cat $SCRIPTDIR/jobtail.sh | tee -a $JOB.sh && $RUNCMD $JOB.sh
 	else
 		echo "[$(date)] Executing Pairtools workflow..."
-		source $EXECDIR/dualpairtools.exec
+		source $SCRIPTDIR/dualpairtools.exec
 		echo "[$(date)] Executing PreText workflow..."
-		source $EXECDIR/pretext.exec \
+		source $SCRIPTDIR/pretext.exec \
 			&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 	fi		
 
@@ -432,7 +451,7 @@ if [ ! -f "$KEYOUT" ] && [ "$DEV" = "TRUE" ]; then
 		echo touch $STEP.done | tee -a $JOB.sh
 		cat $SCRIPTDIR/jobtail.sh | tee -a $JOB.sh && $RUNCMD $JOB.sh
 	else
-		source $EXECDIR/dualpairtools.exec && source $EXECDIR/pretext.exec | tee -a $JOB.sh \
+		source $SCRIPTDIR/dualpairtools.exec && source $SCRIPTDIR/pretext.exec | tee -a $JOB.sh \
 			&& echo -e "$START\n[$(date)] Step $STEP complete" | tee $STEP.done
 	fi		
 
@@ -473,7 +492,6 @@ if [ ! -f "$KEYOUT" ]; then
 		#---------------
 		# Run Compleasm
 		RUN=run_$GENBASE.compleasm
-		THREADS=$SLURM_CPUS_PER_TASK
 		echo "[$(date)] Running Compleasm ($ODB10) on $GENOME..."
 		$COMPLEASM run -a $GENOME -o $RUN -t $THREADS -l ${ODB10/_odb10/} -L $LPATH
 		#---------------
@@ -645,8 +663,8 @@ fi
 ### ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ###
 STEP=08-ReadMapping
 START="[$(date)] Step $STEP"
-KEYOUT=$NEWBASE.hap2.$READTYPE.paf
-KEYOUTS="$NEWBASE.hap1.$READTYPE.bam $NEWBASE.hap2.$READTYPE.bam $NEWBASE.hap1.$READTYPE.paf $KEYOUT"
+KEYOUT=$NEWBASE.hap2.$READTYPE.bam
+KEYOUTS="$NEWBASE.hap1.$READTYPE.bam $NEWBASE.hap2.$READTYPE.bam $NEWBASE.hap1.$READTYPE.paf $NEWBASE.hap2.$READTYPE.paf"
 if [ ! -f "$KEYOUT" ]; then
 
 	# Define key new variables inc. settings for Minimap2
@@ -664,11 +682,13 @@ if [ ! -f "$KEYOUT" ]; then
 		&& rm -v ${SAM/.sam/.tmp.bam} $SAM 
 	echo "[$(date)] Splitting BAM and PAF files into haplotypes..."
 	HAPBASE=$NEWBASE.hap1
+	echo "[$(date)] $HAPBASE..."
 	awk '{print $1"\t1\t"$2;}' $HAPBASE.telomeres.tdt | grep -v SeqName | tee $HAPBASE.bed \
 		&& $SAMTOOLS view -h -@ $THREADS -L $HAPBASE.bed $BAM | grep -v "SN:$PREF2" | $SAMTOOLS view -hb -@ $THREADS - > $HAPBASE.$READTYPE.bam \
 		&& $SAMTOOLS index -b $HAPBASE.$READTYPE.bam $HAPBASE.$READTYPE.bam.bai
 	grep $PREF1 ${SAM/.sam/.paf} > $HAPBASE.$READTYPE.paf
 	HAPBASE=$NEWBASE.hap2
+	echo "[$(date)] $HAPBASE..."
 	awk '{print $1"\t1\t"$2;}' $HAPBASE.telomeres.tdt | grep -v SeqName | tee $HAPBASE.bed \
 		&& $SAMTOOLS view -h -@ $THREADS -L $HAPBASE.bed $BAM | grep -v "SN:$PREF1" | $SAMTOOLS view -hb -@ $THREADS - > $HAPBASE.$READTYPE.bam \
 		&& $SAMTOOLS index -b $HAPBASE.$READTYPE.bam $HAPBASE.$READTYPE.bam.bai
@@ -788,11 +808,12 @@ if [ ! -f "$KEYOUT" ]; then
 			$KAT sect -t $THREADS -o $NEWBASE.$HAP.alt.kat $NEWBASE.$HAP.fasta $ALTGENOME
 			#i# Create self homology file
 			MMSETTINGS="-aDP -I 4G -k19 -w19 -m200"
+			SBAM=$NEWBASE.$HAP.self.bam
 			$MINIMAP2 -t $THREADS $MMSETTINGS $NEWBASE.$HAP.fasta $NEWBASE.$HAP.fasta | \
 				$SAMTOOLS view -b -h - | \
-				$SAMTOOLS sort - | tee $NEWBASE.$HAP.self.bam | \
+				$SAMTOOLS sort - | tee $SBAM | \
 				$SAMTOOLS flagstat - 
-			$SAMTOOLS index -b $NEWBASE.$HAP.self.bam $NEWBASE.$HAP.self.bam.bai
+			$SAMTOOLS index -b $SBAM $SBAM.bai
 		fi
 	done
 
